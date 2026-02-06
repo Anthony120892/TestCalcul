@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "config": {
+    "exonerations": {
+      "bati_base": 7500,
+      "bati_par_enfant": 1250,
+      "non_bati_base": 3000
+    },
+    "capital_mobilier": {
+      "t0_max": 6199,
+      "t1_min": 6200,
+      "t1_max": 12500,
+      "t1_rate": 0.06,
+      "t2_rate": 0.1
+    },
+    "immunisation_simple_annuelle": {
+      "cohab_ou_isole": 250,
+      "fam_charge": 310
+    },
+    "ris_rates": {
+      "cohab": 0,
+      "isole": 0,
+      "fam_charge": 0
+    }
+  }
+}
