@@ -1,27 +1,43 @@
 {
   "version": "1.0",
   "config": {
-    "exonerations": {
-      "bati_base": 750,
-      "bati_par_enfant": 125,
-      "non_bati_base": 30
-    },
-    "capital_mobilier": {
-      "t0_max": 6199,
-      "t1_min": 6200,
-      "t1_max": 12500,
-      "t1_rate": 0.06,
-      "t2_rate": 0.1
+    "ris_rates": {
+      "cohab": 0.0,
+      "isole": 0.0,
+      "fam_charge": 0.0
     },
     "immunisation_simple_annuelle": {
-      "cohab": 155,
-      "isole": 250,
-      "fam_charge": 310
+      "cohab": 155.0,
+      "isole": 250.0,
+      "fam_charge": 310.0
     },
-    "ris_rates": {
-      "cohab": 0,
-      "isole": 0,
-      "fam_charge": 0
+    "capital_mobilier": {
+      "t0": 6200.0,
+      "t1": 12500.0,
+      "rate_1": 0.06,
+      "rate_2": 0.1
+    },
+    "immo": {
+      "bati_base": 750.0,
+      "bati_par_enfant": 125.0,
+      "non_bati_base": 30.0,
+      "coeff_rc": 3.0
+    },
+    "socio_prof": {
+      "max_mensuel": 274.82,
+      "artistique_annuel": 3297.8
+    },
+    "cession": {
+      "tranche_immunisee": 37200.0,
+      "usufruit_ratio": 0.4,
+      "abattements_annuels": {
+        "cat1": 1250.0,
+        "cat2": 2000.0,
+        "cat3": 2500.0
+      }
+    },
+    "ale": {
+      "exon_mensuelle": 4.1
     }
   }
 }
