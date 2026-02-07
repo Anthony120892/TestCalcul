@@ -31,7 +31,7 @@ DEFAULT_ENGINE = {
         },
         "socio_prof": {  # immunisation double / exo socio-pro
             "max_mensuel": 274.82,          # à adapter si indexé
-            "artistique_annuel": 3297.80,   # 274,82*12 (à adapter si indexé)
+            "artistique_annuel": 3297.80,   # équivalent annuel (à adapter si indexé)
         },
         "cession": {  # art. 28-32 AR
             "tranche_immunisee": 37200.0,
@@ -47,7 +47,6 @@ DEFAULT_ENGINE = {
         }
     }
 }
-
 
 # ============================================================
 # UTILITAIRES
@@ -79,7 +78,9 @@ def capital_mobilier_monthly(total_capital: float,
       - fraction = 1/nb_titulaires
       - si categorie = fam_charge ET conjoint_compte_commun = True : fraction = 2/nb_titulaires
     Sinon: fraction = part_fraction_custom (0-1)
-    On applique la fraction au capital ET aux seuils, ce qui revient à calculer sur total * fraction.
+
+    IMPORTANT (corrigé) :
+    -> On applique la fraction AU CAPITAL seulement (pas aux seuils).
     """
     total_capital = max(0.0, float(total_capital))
 
@@ -90,12 +91,12 @@ def capital_mobilier_monthly(total_capital: float,
     else:
         fraction = clamp01(part_fraction_custom)
 
-    adj_total = total_capital * fraction
+    adj_total = total_capital * fraction  # part prise en compte
 
-    t0 = cfg_cap["t0"] * fraction
-    t1 = cfg_cap["t1"] * fraction
-    r1 = cfg_cap["rate_1"]
-    r2 = cfg_cap["rate_2"]
+    t0 = float(cfg_cap["t0"])
+    t1 = float(cfg_cap["t1"])
+    r1 = float(cfg_cap["rate_1"])
+    r2 = float(cfg_cap["rate_2"])
 
     annuel = 0.0
     if adj_total <= t0:
@@ -121,24 +122,24 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
       - habitation_principale: bool
       - bati: bool
       - rc_non_indexe: float (annuel)
-      - fraction_droits: float (0-1)  # indivision/pleine prop/usufruit
+      - fraction_droits: float (0-1)
       - hypotheque: bool
       - interets_annuels: float
       - viager: bool
       - rente_viagere_annuelle: float
     """
-
-    # On ne compte que les biens non "habitation principale"
     biens_countes = [b for b in biens if not b.get("habitation_principale", False)]
 
-    # Pour multipropriété : exonération divisée par le nombre de biens (par catégorie bâti / non bâti)
+    if not biens_countes:
+        return 0.0
+
+    # multipropriété: exonération divisée par nb de biens (par type)
     nb_bati = sum(1 for b in biens_countes if b.get("bati", True))
     nb_non_bati = sum(1 for b in biens_countes if not b.get("bati", True))
-    nb_bati = max(1, nb_bati) if any(b.get("bati", True) for b in biens_countes) else 0
-    nb_non_bati = max(1, nb_non_bati) if any((not b.get("bati", True)) for b in biens_countes) else 0
 
-    base_exo_bati_total = cfg_immo["bati_base"] + cfg_immo["bati_par_enfant"] * max(0, int(enfants))
-    base_exo_non_bati_total = cfg_immo["non_bati_base"]
+    base_exo_bati_total = float(cfg_immo["bati_base"]) + float(cfg_immo["bati_par_enfant"]) * max(0, int(enfants))
+    base_exo_non_bati_total = float(cfg_immo["non_bati_base"])
+    coeff = float(cfg_immo["coeff_rc"])
 
     total_annuel = 0.0
 
@@ -147,25 +148,25 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
         rc = max(0.0, float(b.get("rc_non_indexe", 0.0)))
         frac = clamp01(b.get("fraction_droits", 1.0))
 
-        # Indivision: RC * fraction avant calcul
+        # indivision: RC * fraction
         rc_part = rc * frac
 
-        # Exo (par bien) : exo_total * fraction, puis / nb biens de ce type
+        # exonération: (exo_total / nb biens du même type) puis * fraction
         if bati:
-            exo_total_part = base_exo_bati_total * frac
-            exo_par_bien = exo_total_part / (nb_bati if nb_bati > 0 else 1)
+            div = max(1, nb_bati)
+            exo_par_bien = (base_exo_bati_total / div) * frac
         else:
-            exo_total_part = base_exo_non_bati_total * frac
-            exo_par_bien = exo_total_part / (nb_non_bati if nb_non_bati > 0 else 1)
+            div = max(1, nb_non_bati)
+            exo_par_bien = (base_exo_non_bati_total / div) * frac
 
-        base = max(0.0, (rc_part - exo_par_bien) * cfg_immo["coeff_rc"])  # annuel à prendre en compte (avant réductions)
+        base = max(0.0, (rc_part - exo_par_bien) * coeff)
 
-        # Hypothèque : réduction = intérêts * fraction, plafonnée à 50% du montant à prendre en considération
+        # hypothèque: intérêts * fraction (plafond 50% du base)
         if b.get("hypotheque", False):
             interets = max(0.0, float(b.get("interets_annuels", 0.0))) * frac
             base -= min(interets, 0.5 * base)
 
-        # Viager : réduction = rente * fraction, plafonnée à 50% du montant à prendre en considération
+        # viager: rente * fraction (plafond 50% du base)
         if b.get("viager", False):
             rente = max(0.0, float(b.get("rente_viagere_annuelle", 0.0))) * frac
             base -= min(rente, 0.5 * base)
@@ -178,69 +179,73 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
 # ============================================================
 # CESSION DE BIENS (art. 28 à 32 AR)
 # - Calcul comme capitaux mobiliers sur valeur vénale
-# - Indivision : valeur * fraction (ou fraction demandeur+conjoint si fam_charge)
 # - Usufruit : 40% de la pleine propriété
-# - Tranche immunisée 37.200 (cas particulier) pondérée par fraction
-# - Déduction dettes (option) + abattement annuel proratisé
+# - Indivision : appliquer UNE fraction (soit fraction_droits par cession, soit fraction globale)
+# - Tranche immunisée 37.200 (cas particulier)
+# - Dettes + abattement proratisé
 # ============================================================
 def cession_biens_monthly(cessions: list,
                           categorie: str,
-                          conjoint_fraction_in_division: bool,
-                          fraction_demandeur: float,
-                          fraction_demandeur_et_conjoint: float,
                           cas_particulier_tranche_37200: bool,
                           dettes_deductibles: float,
                           abatt_cat: str,
                           abatt_mois_prorata: int,
+                          # gestion fractions
+                          appliquer_fraction_globale: bool,
+                          fraction_globale: float,
+                          fam_charge_conjoint: bool,
+                          fraction_demandeur_et_conjoint: float,
                           cfg_cession: dict,
                           cfg_cap: dict) -> float:
     """
     cessions: liste dict
-      - valeur_venale: float
-      - usufruit: bool
-      - en_indivision: bool
-      - fraction_droits: float (0-1) si indivision (sinon 1)
-    Règle: si plusieurs cessions -> tranches une fois sur total des cessions
-    (et séparé des capitaux mobiliers)
+      - valeur_venale
+      - usufruit
+      - en_indivision
+      - fraction_droits (si en indivision)
     """
+    if not cessions:
+        return 0.0
 
     total = 0.0
     for c in cessions:
         v = max(0.0, float(c.get("valeur_venale", 0.0)))
+
+        # usufruit
         if c.get("usufruit", False):
             v *= float(cfg_cession["usufruit_ratio"])
 
-        if c.get("en_indivision", False):
-            frac = clamp01(c.get("fraction_droits", 1.0))
-            v *= frac
-
-        # Cas "fam_charge + conjoint/partenaire en indivision": on permet d'utiliser une fraction globale (demandeur+conjoint)
-        if categorie == "fam_charge" and conjoint_fraction_in_division:
-            v *= clamp01(fraction_demandeur_et_conjoint)
+        # fraction: UNE seule logique
+        if appliquer_fraction_globale:
+            if categorie == "fam_charge" and fam_charge_conjoint:
+                v *= clamp01(fraction_demandeur_et_conjoint)
+            else:
+                v *= clamp01(fraction_globale)
         else:
-            v *= clamp01(fraction_demandeur)
+            # fraction par cession si indivision
+            if c.get("en_indivision", False):
+                v *= clamp01(c.get("fraction_droits", 1.0))
 
         total += v
 
-    # Déduction des dettes personnelles liées à la cession (si conditions remplies -> c'est toi qui coches)
+    # dettes déductibles (si conditions remplies => tu coches)
     total = max(0.0, total - max(0.0, float(dettes_deductibles)))
 
-    # Tranche immunisée 37.200 (cas particulier) pondérée (déjà pondérée via fractions ci-dessus)
+    # tranche immunisée 37.200 (cas particulier)
     if cas_particulier_tranche_37200:
         total = max(0.0, total - float(cfg_cession["tranche_immunisee"]))
 
-    # Abattement annuel (cat. 1/2/3) proratisé
+    # abattement annuel proratisé
     abatt_annuel = float(cfg_cession["abattements_annuels"].get(abatt_cat, 0.0))
     mois = max(0, min(12, int(abatt_mois_prorata)))
     abatt_prorata = abatt_annuel * (mois / 12.0)
     total = max(0.0, total - abatt_prorata)
 
-    # Ensuite, calcul comme capitaux mobiliers (mais sur "valeur vénale")
-    # Ici pas de compte commun: on calc directement sur total (seuils non fractionnés car déjà pondérés)
-    t0 = cfg_cap["t0"]
-    t1 = cfg_cap["t1"]
-    r1 = cfg_cap["rate_1"]
-    r2 = cfg_cap["rate_2"]
+    # calcul par tranches comme capitaux mobiliers
+    t0 = float(cfg_cap["t0"])
+    t1 = float(cfg_cap["t1"])
+    r1 = float(cfg_cap["rate_1"])
+    r2 = float(cfg_cap["rate_2"])
 
     annuel = 0.0
     if total <= t0:
@@ -255,19 +260,15 @@ def cession_biens_monthly(cessions: list,
 
 
 # ============================================================
-# EXONERATIONS SOCIO-PRO / ARTISTIQUE (version "moteur" simple)
+# EXONERATIONS SOCIO-PRO / ARTISTIQUE (moteur simplifié)
 # ============================================================
 def revenus_mensuels_total(revenus: list, cfg_soc: dict) -> float:
     """
     revenus: liste dict
-      - montant_mensuel: float
-      - type: "standard" | "socio_prof" | "etudiant" | "artistique_irregulier" | "ale"
-      - eligible: bool (pour socio_prof/etudiant/artistique)
-      - ale_part_excedentaire: float (si type=ale) -> part > 4,10 à compter (simplifié)
-    Règles:
-      - socio_prof / etudiant : déduction max mensuelle (si eligible)
-      - artistique irrégulier : déduction annuelle /12 (si eligible), non cumulable => à gérer par choix dans l'UI
-      - ALE : on ajoute seulement la part excédentaire (simplification)
+      - montant_mensuel
+      - type: standard | socio_prof | etudiant | artistique_irregulier | ale
+      - eligible
+      - ale_part_excedentaire
     """
     total = 0.0
     for r in revenus:
@@ -278,12 +279,14 @@ def revenus_mensuels_total(revenus: list, cfg_soc: dict) -> float:
         if t in ("socio_prof", "etudiant") and eligible:
             ded = min(float(cfg_soc["max_mensuel"]), m)
             total += max(0.0, m - ded)
+
         elif t == "artistique_irregulier" and eligible:
             ded_m = float(cfg_soc["artistique_annuel"]) / 12.0
             total += max(0.0, m - min(ded_m, m))
+
         elif t == "ale":
-            # Simplifié: tu fournis directement la part à compter (celle > 4,10€)
             total += max(0.0, float(r.get("ale_part_excedentaire", 0.0)))
+
         else:
             total += m
 
@@ -298,19 +301,6 @@ def cohabitant_part_a_compter(montant_cohab: float,
                               categorie: str,
                               taux_ris_cohab: float,
                               pourcentage_facultatif: float) -> float:
-    """
-    type_cohab:
-      - "aucun"
-      - "conjoint_partenaire"
-      - "asc_desc_1er_deg"
-      - "autre"
-    Règles:
-      - conjoint/partenaire:
-           * si categorie fam_charge: tout compter
-           * sinon: compter la partie qui dépasse le taux cohabitant
-      - asc/desc 1er degré: facultatif, sur la partie qui dépasse le taux cohabitant
-      - autres: 0
-    """
     m = max(0.0, float(montant_cohab))
     taux = max(0.0, float(taux_ris_cohab))
     pct = clamp01(pourcentage_facultatif)
@@ -343,7 +333,7 @@ def immunisation_simple_monthly(categorie: str, cfg_immu: dict) -> float:
 def compute_all(answers: dict, engine: dict) -> dict:
     cfg = engine["config"]
 
-    # 1) revenus (avec exo socio-pro simplifiée)
+    # 1) revenus
     revenus = revenus_mensuels_total(answers.get("revenus", []), cfg["socio_prof"])
 
     # 2) capitaux mobiliers
@@ -368,18 +358,19 @@ def compute_all(answers: dict, engine: dict) -> dict:
     cession = cession_biens_monthly(
         cessions=answers.get("cessions", []),
         categorie=answers.get("categorie", "isole"),
-        conjoint_fraction_in_division=answers.get("cession_fam_charge_conjoint_indivision", False),
-        fraction_demandeur=answers.get("cession_fraction_demandeur", 1.0),
-        fraction_demandeur_et_conjoint=answers.get("cession_fraction_demandeur_et_conjoint", 1.0),
         cas_particulier_tranche_37200=answers.get("cession_cas_particulier_37200", False),
         dettes_deductibles=answers.get("cession_dettes_deductibles", 0.0),
         abatt_cat=answers.get("cession_abatt_cat", "cat1"),
         abatt_mois_prorata=answers.get("cession_abatt_mois", 0),
+        appliquer_fraction_globale=answers.get("cession_utiliser_fraction_globale", False),
+        fraction_globale=answers.get("cession_fraction_globale", 1.0),
+        fam_charge_conjoint=answers.get("cession_fam_charge_conjoint_indivision", False),
+        fraction_demandeur_et_conjoint=answers.get("cession_fraction_demandeur_et_conjoint", 1.0),
         cfg_cession=cfg["cession"],
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) cohabitant (art.34)
+    # 5) cohabitant
     taux_cohab = float(cfg["ris_rates"]["cohab"])
     cohab = cohabitant_part_a_compter(
         montant_cohab=answers.get("cohabitant_montant", 0.0),
@@ -389,16 +380,14 @@ def compute_all(answers: dict, engine: dict) -> dict:
         pourcentage_facultatif=answers.get("cohabitant_pct", 0.0)
     )
 
-    # 6) avantage nature (art.33)
+    # 6) avantage nature
     avantage_nature = max(0.0, float(answers.get("avantage_nature_logement", 0.0)))
 
     total_avant = revenus + cap + immo + cession + cohab + avantage_nature
 
-    # taux RIS
     cat = answers.get("categorie", "isole")
     taux_ris = float(cfg["ris_rates"].get(cat, 0.0))
 
-    # immunisation simple si ressources < taux
     immu = 0.0
     if taux_ris > 0 and total_avant < taux_ris:
         immu = immunisation_simple_monthly(cat, cfg["immunisation_simple_annuelle"])
@@ -452,7 +441,6 @@ with st.sidebar:
 
 # ---------------- Answers ----------------
 answers = {}
-
 answers["categorie"] = st.selectbox("Catégorie", ["cohab", "isole", "fam_charge"])
 answers["enfants_a_charge"] = st.number_input("Enfants à charge", min_value=0, value=0, step=1)
 
@@ -484,7 +472,6 @@ for i in range(int(nb_rev)):
         "eligible": eligible,
         "ale_part_excedentaire": float(ale_part_exc)
     })
-
 answers["revenus"] = revenus
 
 # ---------------- Capitaux ----------------
@@ -562,25 +549,36 @@ st.caption("Valeur vénale → calcul comme capitaux mobiliers (même si produit
 
 cessions = []
 a_ces = st.checkbox("Le demandeur a cédé des biens dans les 10 dernières années")
+
 answers["cessions"] = []
-answers["cession_fraction_demandeur"] = 1.0
-answers["cession_fraction_demandeur_et_conjoint"] = 1.0
-answers["cession_fam_charge_conjoint_indivision"] = False
 answers["cession_cas_particulier_37200"] = False
 answers["cession_dettes_deductibles"] = 0.0
 answers["cession_abatt_cat"] = "cat1"
 answers["cession_abatt_mois"] = 0
 
+# gestion fractions cession (corrigé)
+answers["cession_utiliser_fraction_globale"] = False
+answers["cession_fraction_globale"] = 1.0
+answers["cession_fam_charge_conjoint_indivision"] = False
+answers["cession_fraction_demandeur_et_conjoint"] = 1.0
+
 if a_ces:
-    st.markdown("**Pondérations de droits (si indivision)**")
-    answers["cession_fraction_demandeur"] = st.number_input("Fraction globale du demandeur (0–1)", min_value=0.0, max_value=1.0, value=1.0, step=0.1)
-    if answers["categorie"] == "fam_charge":
-        answers["cession_fam_charge_conjoint_indivision"] = st.checkbox(
-            "Cession en indivision avec conjoint/partenaire (famille à charge) → appliquer fraction demandeur+conjoint",
-            value=False
-        )
-        if answers["cession_fam_charge_conjoint_indivision"]:
-            answers["cession_fraction_demandeur_et_conjoint"] = st.number_input("Fraction demandeur + conjoint (0–1)", min_value=0.0, max_value=1.0, value=1.0, step=0.1)
+    st.markdown("### Fraction / indivision (choisis UNE méthode)")
+    use_global = st.checkbox("Utiliser une fraction globale (sinon: fraction par cession)", value=False)
+    answers["cession_utiliser_fraction_globale"] = use_global
+
+    if use_global:
+        answers["cession_fraction_globale"] = st.number_input("Fraction globale du demandeur (0–1)", min_value=0.0, max_value=1.0, value=1.0, step=0.1)
+        if answers["categorie"] == "fam_charge":
+            answers["cession_fam_charge_conjoint_indivision"] = st.checkbox(
+                "Famille à charge + indivision avec conjoint/partenaire → fraction demandeur+conjoint",
+                value=False
+            )
+            if answers["cession_fam_charge_conjoint_indivision"]:
+                answers["cession_fraction_demandeur_et_conjoint"] = st.number_input(
+                    "Fraction demandeur + conjoint (0–1)",
+                    min_value=0.0, max_value=1.0, value=1.0, step=0.1
+                )
 
     answers["cession_cas_particulier_37200"] = st.checkbox("Cas particulier: tranche immunisée 37.200€ applicable", value=False)
 
@@ -600,7 +598,7 @@ if a_ces:
         usuf = st.checkbox(f"Cession d’usufruit ? (cession {i+1})", value=False, key=f"ces_u_{i}")
         indiv = st.checkbox(f"En indivision ? (cession {i+1})", value=False, key=f"ces_i_{i}")
         frac = 1.0
-        if indiv:
+        if (not use_global) and indiv:
             frac = st.number_input(f"Fraction de droits (0–1) (cession {i+1})", min_value=0.0, max_value=1.0, value=1.0, step=0.1, key=f"ces_f_{i}")
 
         cessions.append({
@@ -644,5 +642,4 @@ if st.button("Calculer le RIS"):
     st.write("### Détail (mensuel)")
     st.json(res)
 
-    st.info("💡 Si tu veux sauvegarder les paramètres dans ris_rules.json, je peux te générer le fichier aussi.")
-
+    st.info("💡 Sur Streamlit Cloud, mets comme 'Main file path' : **streamlit_app.py**")
