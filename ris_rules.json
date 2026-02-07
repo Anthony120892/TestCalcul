@@ -2,9 +2,9 @@
   "version": "1.0",
   "config": {
     "exonerations": {
-      "bati_base": 7500,
-      "bati_par_enfant": 1250,
-      "non_bati_base": 3000
+      "bati_base": 750,
+      "bati_par_enfant": 125,
+      "non_bati_base": 30
     },
     "capital_mobilier": {
       "t0_max": 6199,
