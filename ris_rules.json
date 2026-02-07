@@ -14,7 +14,8 @@
       "t2_rate": 0.1
     },
     "immunisation_simple_annuelle": {
-      "cohab_ou_isole": 250,
+      "cohab": 155,
+      "isole": 250,
       "fam_charge": 310
     },
     "ris_rates": {
