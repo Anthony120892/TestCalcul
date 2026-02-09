@@ -68,7 +68,7 @@ def normalize_engine(raw: dict) -> dict:
     engine = deep_merge(DEFAULT_ENGINE, raw)
     cfg = engine["config"]
 
-    # Si l’utilisateur n’a que "exonerations", on mappe vers "immo"
+    # Compat: si l’utilisateur n’a que "exonerations", on mappe vers "immo"
     if "exonerations" in cfg and "immo" in cfg:
         exo = cfg["exonerations"]
         cfg["immo"]["bati_base"] = float(exo.get("bati_base", cfg["immo"]["bati_base"]))
@@ -175,10 +175,8 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
         rc = max(0.0, float(b.get("rc_non_indexe", 0.0)))
         frac = clamp01(b.get("fraction_droits", 1.0))
 
-        # Indivision: RC * fraction avant calcul
         rc_part = rc * frac
 
-        # Multipropriété: exo divisé par nb de biens du type
         if bati:
             exo_par_bien = ((exo_bati_total * frac) / nb_bati) if nb_bati > 0 else 0.0
         else:
@@ -186,12 +184,10 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
 
         base = max(0.0, (rc_part - exo_par_bien) * coeff)
 
-        # Hypothèque: intérêts * fraction, plafonné à 50% du montant à prendre en compte
         if b.get("hypotheque", False):
             interets = max(0.0, float(b.get("interets_annuels", 0.0))) * frac
             base -= min(interets, 0.5 * base)
 
-        # Viager: rente * fraction, plafonné à 50%
         if b.get("viager", False):
             rente = max(0.0, float(b.get("rente_viagere_annuelle", 0.0))) * frac
             base -= min(rente, 0.5 * base)
@@ -210,14 +206,6 @@ def cession_biens_monthly(cessions: list,
                           abatt_mois_prorata: int,
                           cfg_cession: dict,
                           cfg_cap: dict) -> float:
-    """
-    - totalise les valeurs (si plusieurs cessions: tranches 1 seule fois sur total)
-    - usufruit => ratio (si coché)
-    - dettes déductibles => option manuelle (si conditions remplies)
-    - tranche immunisée 37.200 => option manuelle (cas particulier)
-    - abattement annuel proratisé
-    - puis calcul par tranches comme capitaux mobiliers (seuils complets)
-    """
     total = 0.0
     for c in cessions:
         v = max(0.0, float(c.get("valeur_venale", 0.0)))
@@ -234,7 +222,6 @@ def cession_biens_monthly(cessions: list,
     mois = max(0, min(12, int(abatt_mois_prorata)))
     total = max(0.0, total - (abatt_annuel * (mois / 12.0)))
 
-    # Calcul comme capitaux mobiliers (seuils non fractionnés ici)
     t0_max = float(cfg_cap["t0_max"])
     t1_min = float(cfg_cap["t1_min"])
     t1_max = float(cfg_cap["t1_max"])
@@ -268,7 +255,6 @@ def cohabitant_monthly_cpasmode(cohabitants_revenus_annuels_total: float,
     """
     Logique observée:
       (revenus_cohabitants_annuels - taux_reference_annuel) / 2 - immunisation_simple_cohab
-    où taux_reference_annuel souvent = RIS "famille à charge" annuel (cat.E dans tes annexes).
     """
     r = max(0.0, float(cohabitants_revenus_annuels_total))
     ref = max(0.0, float(taux_annuel_reference))
@@ -281,14 +267,13 @@ def cohabitant_monthly_cpasmode(cohabitants_revenus_annuels_total: float,
     return base / 12.0
 
 # ============================================================
-# CALCUL GLOBAL (avec champs ANNUELS séparés demandeur/cohabitants)
+# CALCUL GLOBAL
 # ============================================================
 def compute_all(answers: dict, engine: dict) -> dict:
     cfg = engine["config"]
     cat = answers.get("categorie", "isole")
 
     taux_ris_m = float(cfg["ris_rates"].get(cat, 0.0))
-    taux_ris_annuel = taux_ris_m * 12.0
 
     # 1) Revenus demandeur (ANNUEl -> mensuel)
     demandeur_annuel = max(0.0, float(answers.get("demandeur_revenus_annuels", 0.0)))
@@ -323,19 +308,18 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) Cohabitants (ANNUEl -> part mensuelle à compter)
-    # Sécurité: si isolé, on ignore totalement
+    # 5) Cohabitants (ANNUEl -> part mensuelle à compter) — ignoré si isolé
     cohab_m = 0.0
     cohabitants_annuels_total = 0.0
+    ref_annuel = 0.0
 
     if cat in ("cohab", "fam_charge"):
         cohabitants_list = answers.get("cohabitants_revenus_annuels_list", []) or []
         cohabitants_annuels_total = sum(max(0.0, float(x)) for x in cohabitants_list)
 
-        # Référence annuelle (auto depuis taux fam_charge si encodé, sinon fallback)
         ref_auto = float(cfg["ris_rates"].get("fam_charge", 0.0)) * 12.0
         if ref_auto <= 0:
-            ref_auto = 21312.87  # fallback utile si l'utilisateur n'a pas encodé les taux
+            ref_auto = 21312.87  # fallback si taux pas encodés
 
         ref_annuel = float(answers.get("cohabitant_ref_annuel", ref_auto))
         immu_cohab_ann = float(cfg["immunisation_simple_annuelle"].get("cohab", 155.0))
@@ -369,6 +353,7 @@ def compute_all(answers: dict, engine: dict) -> dict:
         "revenus_demandeur_mensuels": revenus_demandeur_m,
 
         "cohabitants_revenus_annuels_total": cohabitants_annuels_total,
+        "cohabitant_reference_annuelle": ref_annuel,
         "cohabitant_part_a_compter_mensuel": cohab_m,
 
         "capitaux_mobiliers_mensuels": cap,
@@ -387,37 +372,35 @@ def compute_all(answers: dict, engine: dict) -> dict:
 # UI STREAMLIT
 # ============================================================
 st.set_page_config(page_title="Calcul RIS (prototype)", layout="centered")
-st.title("Calcul RIS – Prototype (annuel demandeur + annuel cohabitants + prorata 1er mois)")
-st.caption("Encodage clair (pas de double comptage) + calcul du 1er mois au prorata des jours restants 😄")
 
 engine = load_engine()
 cfg = engine["config"]
 
-# ---------------- Sidebar config ----------------
+# ---------------- Logo + titre (header) ----------------
+# Mets logo.png dans le même dossier que streamlit_app.py (ou change le chemin)
+col1, col2 = st.columns([1, 5])
+with col1:
+    st.image("logo.png", use_container_width=True)
+with col2:
+    st.title("Calcul RIS – Prototype")
+    st.caption("Annuel demandeur + annuel cohabitants (pas de double comptage) + prorata 1er mois")
+
+# ---------------- Sidebar logo + paramètres ----------------
 with st.sidebar:
+    # Logo dans la sidebar aussi (optionnel)
+    st.image("logo.png", use_container_width=True)
+
     st.subheader("Paramètres")
     st.write("**Taux RIS mensuels officiels** :")
-    cfg["ris_rates"]["cohab"] = st.number_input(
-        "Taux RIS cohabitant (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["cohab"])
-    )
-    cfg["ris_rates"]["isole"] = st.number_input(
-        "Taux RIS isolé (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["isole"])
-    )
-    cfg["ris_rates"]["fam_charge"] = st.number_input(
-        "Taux RIS famille à charge (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["fam_charge"])
-    )
+    cfg["ris_rates"]["cohab"] = st.number_input("Taux RIS cohabitant (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["cohab"]))
+    cfg["ris_rates"]["isole"] = st.number_input("Taux RIS isolé (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["isole"]))
+    cfg["ris_rates"]["fam_charge"] = st.number_input("Taux RIS famille à charge (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["fam_charge"]))
 
     st.divider()
     st.write("**Immunisation simple (€/an)**")
-    cfg["immunisation_simple_annuelle"]["cohab"] = st.number_input(
-        "Immunisation simple cohab (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["cohab"])
-    )
-    cfg["immunisation_simple_annuelle"]["isole"] = st.number_input(
-        "Immunisation simple isolé (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["isole"])
-    )
-    cfg["immunisation_simple_annuelle"]["fam_charge"] = st.number_input(
-        "Immunisation simple fam. charge (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["fam_charge"])
-    )
+    cfg["immunisation_simple_annuelle"]["cohab"] = st.number_input("Immunisation simple cohab (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["cohab"]))
+    cfg["immunisation_simple_annuelle"]["isole"] = st.number_input("Immunisation simple isolé (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["isole"]))
+    cfg["immunisation_simple_annuelle"]["fam_charge"] = st.number_input("Immunisation simple fam. charge (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["fam_charge"]))
 
 # ---------------- Answers ----------------
 answers = {}
@@ -578,6 +561,8 @@ if st.button("Calculer le RIS"):
     # Prorata 1er mois
     prorata = prorata_remaining_from_date(demande_date)
     ris_m1 = ris_first_month_amount(ris_m, demande_date)
+    dim = days_in_month(demande_date)
+    jours_restants = dim - demande_date.day + 1
 
     st.success("Calcul terminé ✅")
 
@@ -585,10 +570,7 @@ if st.button("Calculer le RIS"):
 
     st.write("### Versement")
     st.metric("RIS du 1er mois (prorata) (mois en cours)", f"{ris_m1:.2f}")
-    dim = days_in_month(demande_date)
-    jours_restants = dim - demande_date.day + 1
     st.caption(f"Prorata = {jours_restants}/{dim} = {prorata:.6f} (jour de demande inclus)")
-
     st.write(f"**Mois suivants :** {ris_m:.2f} €/mois (RIS complet)")
 
     st.write("### Détail (mensuel)")
@@ -599,4 +581,6 @@ if st.button("Calculer le RIS"):
     res["ris_premier_mois_prorata"] = ris_m1
     res["ris_mois_suivants"] = ris_m
     st.json(res)
+
+      
     
