@@ -2,36 +2,17 @@
   "version": "1.0",
   "config": {
     "ris_rates": {
-      "cohab": 0,
-      "isole": 0,
-      "fam_charge": 0
+      "cohab": 876.13,
+      "isole": 1314.20,
+      "fam_charge": 1776.07
     },
     "immunisation_simple_annuelle": {
       "cohab": 155,
       "isole": 250,
       "fam_charge": 310
     },
-    "capital_mobilier": {
-      "t0_max": 6199,
-      "t1_min": 6200,
-      "t1_max": 12500,
-      "t1_rate": 0.06,
-      "t2_rate": 0.1
-    },
-    "immo": {
-      "bati_base": 750,
-      "bati_par_enfant": 125,
-      "non_bati_base": 30,
-      "coeff_rc": 3
-    },
-    "cession": {
-      "tranche_immunisee": 37200,
-      "usufruit_ratio": 0.4,
-      "abattements_annuels": {
-        "cat1": 1250,
-        "cat2": 2000,
-        "cat3": 2500
-      }
+    "art34": {
+      "taux_a_laisser_mensuel": 876.13
     }
   }
 }
