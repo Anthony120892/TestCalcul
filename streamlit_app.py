@@ -83,8 +83,10 @@ def normalize_engine(raw: dict) -> dict:
     return engine
 
 def load_engine() -> dict:
-    if os.path.exists("ris_rules.json"):
-        with open("ris_rules.json", "r", encoding="utf-8") as f:
+    # ⚠️ Attention au nom du fichier : ris_rules.json (1 seul underscore)
+    fname = "ris_rules.json"
+    if os.path.exists(fname):
+        with open(fname, "r", encoding="utf-8") as f:
             raw = json.load(f)
         return normalize_engine(raw)
     return normalize_engine(DEFAULT_ENGINE)
@@ -115,18 +117,6 @@ def capital_mobilier_monthly(total_capital: float,
                              conjoint_compte_commun: bool,
                              part_fraction_custom: float,
                              cfg_cap: dict) -> float:
-    """
-    Règle (annuelle):
-      - 0% jusqu’à 6.199
-      - 6% entre 6.200 et 12.500
-      - 10% au-delà
-
-    Compte commun:
-      - fraction = 1/nb titulaires
-      - si categorie == fam_charge ET conjoint co-titulaire => fraction = 2/nb
-    Sinon:
-      - fraction = part_fraction_custom
-    """
     total_capital = max(0.0, float(total_capital))
 
     if compte_commun:
@@ -246,25 +236,46 @@ def immunisation_simple_monthly(categorie: str, cfg_immu: dict) -> float:
     return float(cfg_immu.get(categorie, 0.0)) / 12.0
 
 # ============================================================
-# COHABITANTS — mode CPAS (comme tes décisions)
+# COHABITANTS — art.34 “ligne directe” (1er & 2e degré) + partenaire
+# + Prestations familiales (forfait 240€ si inconnu, sauf handicap)
 # ============================================================
-def cohabitant_monthly_cpasmode(cohabitants_revenus_annuels_total: float,
-                                taux_annuel_reference: float,
-                                immun_simple_annuelle_cohab: float,
-                                appliquer_division_par_2: bool = True) -> float:
+def cohabitants_part_monthly_art34(cohabitants: list, taux_cat1_mensuel: float) -> tuple[float, float, int]:
     """
-    Logique observée:
-      (revenus_cohabitants_annuels - taux_reference_annuel) / 2 - immunisation_simple_cohab
-    """
-    r = max(0.0, float(cohabitants_revenus_annuels_total))
-    ref = max(0.0, float(taux_annuel_reference))
-    immu = max(0.0, float(immun_simple_annuelle_cohab))
+    Retourne (part_cohabitants_a_compter, prestations_familiales_a_compter, n_pris_en_compte)
 
-    base = max(0.0, r - ref)
-    if appliquer_division_par_2:
-        base = base / 2.0
-    base = max(0.0, base - immu)
-    return base / 12.0
+    cohabitants: liste de dict:
+      {
+        "type": "partenaire" | "debiteur_direct_1" | "debiteur_direct_2" | "autre",
+        "revenus_annuels": float,
+        "exclu_equite": bool,
+        "prest_fam_apply": bool,
+        "prest_fam_montant": float,   # 0 si inconnu
+        "prest_fam_handicap": bool
+      }
+    """
+    admissibles = {"partenaire", "debiteur_direct_1", "debiteur_direct_2"}
+    pris = [
+        c for c in (cohabitants or [])
+        if c.get("type") in admissibles and not bool(c.get("exclu_equite", False))
+    ]
+
+    n = len(pris)
+    taux_cat1 = max(0.0, float(taux_cat1_mensuel))
+
+    # Revenus cohabitants mensuels
+    total_rev_m = sum(max(0.0, float(c.get("revenus_annuels", 0.0))) / 12.0 for c in pris)
+
+    # Part à compter: on garantit 1 taux "catégorie 1 / cohabitant" par majeur pris en compte
+    part = max(0.0, total_rev_m - (n * taux_cat1))
+
+    # Prestations familiales (forfait 240€, sauf preuve < 240; suppléments handicap exonérés)
+    prest = 0.0
+    for c in pris:
+        if bool(c.get("prest_fam_apply", False)) and not bool(c.get("prest_fam_handicap", False)):
+            m = float(c.get("prest_fam_montant", 0.0))
+            prest += m if (m > 0.0 and m < 240.0) else 240.0
+
+    return part, prest, n
 
 # ============================================================
 # CALCUL GLOBAL
@@ -275,7 +286,7 @@ def compute_all(answers: dict, engine: dict) -> dict:
 
     taux_ris_m = float(cfg["ris_rates"].get(cat, 0.0))
 
-    # 1) Revenus demandeur (ANNUEl -> mensuel)
+    # 1) Revenus demandeur (ANNUEL -> mensuel)
     demandeur_annuel = max(0.0, float(answers.get("demandeur_revenus_annuels", 0.0)))
     revenus_demandeur_m = demandeur_annuel / 12.0
 
@@ -308,34 +319,22 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) Cohabitants (ANNUEl -> part mensuelle à compter) — ignoré si isolé
-    cohab_m = 0.0
-    cohabitants_annuels_total = 0.0
-    ref_annuel = 0.0
+    # 5) Cohabitants art.34 (ligne directe 1er/2e degré + partenaire)
+    cohab_part_m = 0.0
+    prest_fam_m = 0.0
+    n_coh = 0
 
     if cat in ("cohab", "fam_charge"):
-        cohabitants_list = answers.get("cohabitants_revenus_annuels_list", []) or []
-        cohabitants_annuels_total = sum(max(0.0, float(x)) for x in cohabitants_list)
-
-        ref_auto = float(cfg["ris_rates"].get("fam_charge", 0.0)) * 12.0
-        if ref_auto <= 0:
-            ref_auto = 21312.87  # fallback si taux pas encodés
-
-        ref_annuel = float(answers.get("cohabitant_ref_annuel", ref_auto))
-        immu_cohab_ann = float(cfg["immunisation_simple_annuelle"].get("cohab", 155.0))
-        div2 = bool(answers.get("cohabitant_div2", True))
-
-        cohab_m = cohabitant_monthly_cpasmode(
-            cohabitants_revenus_annuels_total=cohabitants_annuels_total,
-            taux_annuel_reference=ref_annuel,
-            immun_simple_annuelle_cohab=immu_cohab_ann,
-            appliquer_division_par_2=div2
+        taux_cat1_m = float(cfg["ris_rates"].get("cohab", 0.0))
+        cohab_part_m, prest_fam_m, n_coh = cohabitants_part_monthly_art34(
+            cohabitants=answers.get("cohabitants_list", []),
+            taux_cat1_mensuel=taux_cat1_m
         )
 
     # 6) Avantage nature
     avantage_nature = max(0.0, float(answers.get("avantage_nature_logement", 0.0)))
 
-    total_avant = revenus_demandeur_m + cap + immo + cession + cohab_m + avantage_nature
+    total_avant = revenus_demandeur_m + cap + immo + cession + cohab_part_m + prest_fam_m + avantage_nature
 
     # Immunisation simple si ressources < taux
     immu_m = 0.0
@@ -352,9 +351,9 @@ def compute_all(answers: dict, engine: dict) -> dict:
         "revenus_demandeur_annuels": demandeur_annuel,
         "revenus_demandeur_mensuels": revenus_demandeur_m,
 
-        "cohabitants_revenus_annuels_total": cohabitants_annuels_total,
-        "cohabitant_reference_annuelle": ref_annuel,
-        "cohabitant_part_a_compter_mensuel": cohab_m,
+        "cohabitants_n_pris_en_compte": n_coh,
+        "cohabitants_part_a_compter_mensuel": cohab_part_m,
+        "prestations_familiales_a_compter_mensuel": prest_fam_m,
 
         "capitaux_mobiliers_mensuels": cap,
         "immo_mensuels": immo,
@@ -382,12 +381,11 @@ col1, col2 = st.columns([1, 5])
 with col1:
     st.image("logo.png", use_container_width=True)
 with col2:
-    st.title("Calcul RIS – Prototype")
-    st.caption("Annuel demandeur + annuel cohabitants (pas de double comptage) + prorata 1er mois")
+    st.title("Calcul RIS – Prototype (art. 34 – ligne directe 2e degré)")
+    st.caption("Annuel demandeur + cohabitants admissibles (partenaire, asc/desc 1er & 2e degré) + prestations familiales + prorata 1er mois")
 
-# ---------------- Sidebar logo + paramètres ----------------
+# ---------------- Sidebar paramètres ----------------
 with st.sidebar:
-    # Logo dans la sidebar aussi (optionnel)
     st.image("logo.png", use_container_width=True)
 
     st.subheader("Paramètres")
@@ -511,38 +509,64 @@ if a_ces:
         cessions.append({"valeur_venale": float(val), "usufruit": usuf})
     answers["cessions"] = cessions
 
-# ---------------- Cohabitants (ANNUELS) ----------------
+# ---------------- Cohabitants admissibles (art.34) ----------------
 st.divider()
-st.subheader("5) Revenus nets ANNUELS des cohabitants (0, 1, 2, …) — mode CPAS")
-answers["cohabitants_revenus_annuels_list"] = []
-answers["cohabitant_ref_annuel"] = 0.0
-answers["cohabitant_div2"] = True
+st.subheader("5) Cohabitants admissibles (art. 34) — partenaire + ligne directe 1er/2e degré")
+answers["cohabitants_list"] = []
 
 if answers["categorie"] in ("cohab", "fam_charge"):
-    st.caption("Ici : uniquement les cohabitants (autres personnes du ménage), pas le demandeur.")
+    st.caption("⚠️ Sont pris en compte: partenaire de vie, ascendants/descendants en ligne directe (parent/enfant, grand-parent/petit-enfant).")
+    st.caption("Les 'autres' (frère/soeur, oncle, ami, coloc…) ne sont PAS pris en compte.")
 
     nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=1, step=1)
     cohs = []
+
     for i in range(int(nb_coh)):
-        cohs.append(
-            st.number_input(
-                f"Revenus nets annuels Cohabitant {i+1} (€/an)",
-                min_value=0.0, value=0.0, step=100.0, key=f"coh_ann_{i}"
-            )
+        st.markdown(f"**Cohabitant {i+1}**")
+        c1, c2 = st.columns([2, 1])
+
+        typ = c1.selectbox(
+            f"Type (cohabitant {i+1})",
+            ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre"],
+            key=f"coh_typ_{i}"
         )
-    answers["cohabitants_revenus_annuels_list"] = [float(x) for x in cohs]
 
-    ref_auto = float(cfg["ris_rates"]["fam_charge"]) * 12.0
-    if ref_auto <= 0:
-        ref_auto = 21312.87  # fallback si taux non encodés
+        revenus_ann = c2.number_input(
+            f"Revenus nets annuels (€/an) (cohabitant {i+1})",
+            min_value=0.0, value=0.0, step=100.0, key=f"coh_rev_{i}"
+        )
 
-    answers["cohabitant_ref_annuel"] = st.number_input(
-        "Référence annuelle à déduire (€/an) (souvent = RIS 'famille à charge' annuel)",
-        min_value=0.0, value=float(ref_auto), step=100.0
-    )
-    answers["cohabitant_div2"] = st.checkbox("Diviser par 2 (ménage à 2)", value=True)
+        exclu = st.checkbox(
+            f"Ne pas prendre en compte (équité / décision CPAS) (cohabitant {i+1})",
+            value=False, key=f"coh_eq_{i}"
+        )
+
+        st.markdown("**Prestations familiales en faveur du demandeur (perçues par ce cohabitant)**")
+        pf_apply = st.checkbox(f"Oui, il/elle perçoit des prestations familiales pour le demandeur", value=False, key=f"coh_pf_{i}")
+
+        pf_montant = 0.0
+        pf_handicap = False
+        if pf_apply:
+            pf_montant = st.number_input(
+                f"Montant mensuel prouvé (si < 240€) — sinon laisse à 0 pour forfait 240€",
+                min_value=0.0, value=0.0, step=10.0, key=f"coh_pf_m_{i}"
+            )
+            pf_handicap = st.checkbox(
+                f"Supplément(s) lié(s) au handicap (exonéré) ?", value=False, key=f"coh_pf_h_{i}"
+            )
+
+        cohs.append({
+            "type": typ,
+            "revenus_annuels": float(revenus_ann),
+            "exclu_equite": bool(exclu),
+            "prest_fam_apply": bool(pf_apply),
+            "prest_fam_montant": float(pf_montant),
+            "prest_fam_handicap": bool(pf_handicap)
+        })
+
+    answers["cohabitants_list"] = cohs
 else:
-    st.info("Catégorie 'isolé' : pas de cohabitant à encoder ✅")
+    st.info("Catégorie 'isolé' : pas de cohabitants à encoder ✅")
 
 # ---------------- Avantage en nature ----------------
 st.divider()
@@ -581,6 +605,3 @@ if st.button("Calculer le RIS"):
     res["ris_premier_mois_prorata"] = ris_m1
     res["ris_mois_suivants"] = ris_m
     st.json(res)
-
-      
-    
