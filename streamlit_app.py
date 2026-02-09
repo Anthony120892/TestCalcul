@@ -599,3 +599,8 @@ if st.button("Calculer le RIS"):
     res["ris_premier_mois_prorata"] = ris_m1
     res["ris_mois_suivants"] = ris_m
     st.json(res)
+    with st.sidebar:
+    st.image("logo.png", use_container_width=True)
+    st.subheader("Paramètres")
+    ...
+
