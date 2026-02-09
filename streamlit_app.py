@@ -146,10 +146,20 @@ def capital_mobilier_monthly(total_capital: float,
     return annuel / 12.0
 
 # ============================================================
-# IMMOBILIER (RC non indexé) — multipropriété + indivision + hypo/viager (plafond 50%)
+# IMMOBILIER
+# - RC non indexé: (RC - exo) * 3
+# - Si revenus locatifs > RC-calculé, on prend les loyers
+# - Habitation principale exclue
+# - Nue-propriété: non comptée (on ignore le bien)
+# - Indivision (fraction) prise en compte
+# - Hypothèque/viager: déduction plafonnée à 50% du RC-calculé (avant comparaison loyers)
 # ============================================================
 def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
-    biens_countes = [b for b in biens if not b.get("habitation_principale", False)]
+    # Exclure habitation principale et nue-propriété
+    biens_countes = [
+        b for b in (biens or [])
+        if (not b.get("habitation_principale", False)) and (not b.get("nue_propriete", False))
+    ]
 
     nb_bati = sum(1 for b in biens_countes if b.get("bati", True))
     nb_non_bati = sum(1 for b in biens_countes if not b.get("bati", True))
@@ -164,25 +174,35 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
         bati = bool(b.get("bati", True))
         rc = max(0.0, float(b.get("rc_non_indexe", 0.0)))
         frac = clamp01(b.get("fraction_droits", 1.0))
-
         rc_part = rc * frac
 
+        # Multipropriété: exo divisé par nb de biens du type
         if bati:
             exo_par_bien = ((exo_bati_total * frac) / nb_bati) if nb_bati > 0 else 0.0
         else:
             exo_par_bien = ((exo_non_bati_total * frac) / nb_non_bati) if nb_non_bati > 0 else 0.0
 
-        base = max(0.0, (rc_part - exo_par_bien) * coeff)
+        # Base RC-calculée (annuelle)
+        base_rc = max(0.0, (rc_part - exo_par_bien) * coeff)
 
+        # Hypothèque: intérêts * fraction, plafonné à 50% du montant RC-calculé
         if b.get("hypotheque", False):
             interets = max(0.0, float(b.get("interets_annuels", 0.0))) * frac
-            base -= min(interets, 0.5 * base)
+            base_rc -= min(interets, 0.5 * base_rc)
 
+        # Viager: rente * fraction, plafonné à 50% du montant RC-calculé
         if b.get("viager", False):
             rente = max(0.0, float(b.get("rente_viagere_annuelle", 0.0))) * frac
-            base -= min(rente, 0.5 * base)
+            base_rc -= min(rente, 0.5 * base_rc)
 
-        total_annuel += max(0.0, base)
+        base_rc = max(0.0, base_rc)
+
+        # Revenus locatifs: si > base_rc, on prend les loyers (part du demandeur)
+        bien_loue = bool(b.get("bien_loue", False))
+        loyers_annuels = max(0.0, float(b.get("loyers_annuels", 0.0))) * frac
+        base_finale = max(base_rc, loyers_annuels) if bien_loue else base_rc
+
+        total_annuel += base_finale
 
     return total_annuel / 12.0
 
@@ -197,7 +217,7 @@ def cession_biens_monthly(cessions: list,
                           cfg_cession: dict,
                           cfg_cap: dict) -> float:
     total = 0.0
-    for c in cessions:
+    for c in (cessions or []):
         v = max(0.0, float(c.get("valeur_venale", 0.0)))
         if c.get("usufruit", False):
             v *= float(cfg_cession["usufruit_ratio"])
@@ -262,7 +282,6 @@ def cohabitants_part_monthly_art34(cohabitants: list, taux_cat1_mensuel: float) 
     n = len(pris)
     taux_cat1 = max(0.0, float(taux_cat1_mensuel))
 
-    # Revenus cohabitants mensuels
     total_rev_m = sum(max(0.0, float(c.get("revenus_annuels", 0.0))) / 12.0 for c in pris)
 
     # Part à compter: on garantit 1 taux "catégorie 1 / cohabitant" par majeur pris en compte
@@ -319,7 +338,7 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) Cohabitants art.34 (ligne directe 1er/2e degré + partenaire)
+    # 5) Cohabitants art.34
     cohab_part_m = 0.0
     prest_fam_m = 0.0
     n_coh = 0
@@ -376,13 +395,12 @@ engine = load_engine()
 cfg = engine["config"]
 
 # ---------------- Logo + titre (header) ----------------
-# Mets logo.png dans le même dossier que streamlit_app.py (ou change le chemin)
 col1, col2 = st.columns([1, 5])
 with col1:
     st.image("logo.png", use_container_width=True)
 with col2:
-    st.title("Calcul RIS – Prototype (art. 34 – ligne directe 2e degré)")
-    st.caption("Annuel demandeur + cohabitants admissibles (partenaire, asc/desc 1er & 2e degré) + prestations familiales + prorata 1er mois")
+    st.title("Calcul RIS – Prototype (CPAS)")
+    st.caption("Immobilier (RC×3 ou loyers si >), épargne, cessions, cohabitants art.34 (ligne directe 2e degré), + prorata 1er mois")
 
 # ---------------- Sidebar paramètres ----------------
 with st.sidebar:
@@ -421,7 +439,7 @@ answers["demandeur_revenus_annuels"] = st.number_input(
 
 # ---------------- Capitaux ----------------
 st.divider()
-st.subheader("2) Capitaux mobiliers (art. 27 AR)")
+st.subheader("2) Capitaux mobiliers (épargne) (art. 27 AR)")
 a_cap = st.checkbox("Le demandeur possède des capitaux mobiliers")
 answers["capital_mobilier_total"] = 0.0
 answers["capital_compte_commun"] = False
@@ -442,42 +460,75 @@ if a_cap:
 
 # ---------------- Biens immobiliers ----------------
 st.divider()
-st.subheader("3) Biens immobiliers (RC non indexé, (RC - exo) × 3)")
+st.subheader("3) Biens immobiliers")
+st.caption("Calcul: (RC non indexé – exonération) × 3. Si le bien est loué et que les loyers > RC×3, on prend les loyers.")
+st.caption("Nue-propriété: non comptée. Habitation principale: non comptée.")
 biens = []
 a_immo = st.checkbox("Le demandeur possède des biens immobiliers")
 if a_immo:
     nb_biens = st.number_input("Nombre de biens à encoder", min_value=0, value=1, step=1)
     for i in range(int(nb_biens)):
         st.markdown(f"**Bien {i+1}**")
-        habitation_principale = st.checkbox(f"Habitation principale ? (bien {i+1})", value=False, key=f"im_hp_{i}")
-        bati = st.checkbox(f"Bien bâti ? (bien {i+1})", value=True, key=f"im_bati_{i}")
-        rc_non_indexe = st.number_input(f"RC global NON indexé annuel (bien {i+1})", min_value=0.0, value=0.0, step=50.0, key=f"im_rc_{i}")
-        fraction = st.number_input(f"Fraction de droits (0–1) (bien {i+1})", min_value=0.0, max_value=1.0, value=1.0, step=0.1, key=f"im_frac_{i}")
 
+        c1, c2, c3 = st.columns([1, 1, 1])
+        habitation_principale = c1.checkbox("Habitation principale ?", value=False, key=f"im_hp_{i}")
+        nue_propriete = c2.checkbox("Nue-propriété ?", value=False, key=f"im_np_{i}")
+        bati = c3.checkbox("Bien bâti ?", value=True, key=f"im_bati_{i}")
+
+        rc_non_indexe = st.number_input(
+            f"RC global NON indexé annuel (bien {i+1})",
+            min_value=0.0, value=0.0, step=50.0, key=f"im_rc_{i}"
+        )
+        fraction = st.number_input(
+            f"Fraction de droits (0–1) (bien {i+1})",
+            min_value=0.0, max_value=1.0, value=1.0, step=0.1, key=f"im_frac_{i}"
+        )
+
+        bien_loue = False
+        loyers_annuels = 0.0
         hypotheque = False
         interets_annuels = 0.0
         viager = False
         rente = 0.0
 
-        if not habitation_principale:
+        if (not habitation_principale) and (not nue_propriete):
+            bien_loue = st.checkbox(f"Bien loué ? (bien {i+1})", value=False, key=f"im_loue_{i}")
+            if bien_loue:
+                loyers_annuels = st.number_input(
+                    f"Loyers perçus annuels (bruts) (bien {i+1})",
+                    min_value=0.0, value=0.0, step=100.0, key=f"im_loyers_{i}"
+                )
+
             hypotheque = st.checkbox(f"Hypothèque ? (bien {i+1})", value=False, key=f"im_hyp_{i}")
             if hypotheque:
-                interets_annuels = st.number_input(f"Intérêts hypothécaires annuels payés (bien {i+1})", min_value=0.0, value=0.0, step=50.0, key=f"im_int_{i}")
+                interets_annuels = st.number_input(
+                    f"Intérêts hypothécaires annuels payés (bien {i+1})",
+                    min_value=0.0, value=0.0, step=50.0, key=f"im_int_{i}"
+                )
 
             viager = st.checkbox(f"Acquis en viager ? (bien {i+1})", value=False, key=f"im_vi_{i}")
             if viager:
-                rente = st.number_input(f"Rente viagère annuelle payée (bien {i+1})", min_value=0.0, value=0.0, step=50.0, key=f"im_rente_{i}")
+                rente = st.number_input(
+                    f"Rente viagère annuelle payée (bien {i+1})",
+                    min_value=0.0, value=0.0, step=50.0, key=f"im_rente_{i}"
+                )
 
         biens.append({
-            "habitation_principale": habitation_principale,
-            "bati": bati,
+            "habitation_principale": bool(habitation_principale),
+            "nue_propriete": bool(nue_propriete),
+            "bati": bool(bati),
             "rc_non_indexe": float(rc_non_indexe),
             "fraction_droits": float(fraction),
-            "hypotheque": hypotheque,
+
+            "bien_loue": bool(bien_loue),
+            "loyers_annuels": float(loyers_annuels),
+
+            "hypotheque": bool(hypotheque),
             "interets_annuels": float(interets_annuels),
-            "viager": viager,
+            "viager": bool(viager),
             "rente_viagere_annuelle": float(rente)
         })
+
 answers["biens_immobiliers"] = biens
 
 # ---------------- Cession de biens ----------------
@@ -506,7 +557,7 @@ if a_ces:
         st.markdown(f"**Cession {i+1}**")
         val = st.number_input(f"Valeur vénale (€) (cession {i+1})", min_value=0.0, value=0.0, step=100.0, key=f"ces_v_{i}")
         usuf = st.checkbox(f"Cession d’usufruit ? (cession {i+1})", value=False, key=f"ces_u_{i}")
-        cessions.append({"valeur_venale": float(val), "usufruit": usuf})
+        cessions.append({"valeur_venale": float(val), "usufruit": bool(usuf)})
     answers["cessions"] = cessions
 
 # ---------------- Cohabitants admissibles (art.34) ----------------
@@ -515,7 +566,7 @@ st.subheader("5) Cohabitants admissibles (art. 34) — partenaire + ligne direct
 answers["cohabitants_list"] = []
 
 if answers["categorie"] in ("cohab", "fam_charge"):
-    st.caption("⚠️ Sont pris en compte: partenaire de vie, ascendants/descendants en ligne directe (parent/enfant, grand-parent/petit-enfant).")
+    st.caption("Pris en compte: partenaire, ascendants/descendants en ligne directe (parent/enfant, grand-parent/petit-enfant).")
     st.caption("Les 'autres' (frère/soeur, oncle, ami, coloc…) ne sont PAS pris en compte.")
 
     nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=1, step=1)
@@ -542,17 +593,21 @@ if answers["categorie"] in ("cohab", "fam_charge"):
         )
 
         st.markdown("**Prestations familiales en faveur du demandeur (perçues par ce cohabitant)**")
-        pf_apply = st.checkbox(f"Oui, il/elle perçoit des prestations familiales pour le demandeur", value=False, key=f"coh_pf_{i}")
+        pf_apply = st.checkbox(
+            "Oui, il/elle perçoit des prestations familiales pour le demandeur",
+            value=False, key=f"coh_pf_{i}"
+        )
 
         pf_montant = 0.0
         pf_handicap = False
         if pf_apply:
             pf_montant = st.number_input(
-                f"Montant mensuel prouvé (si < 240€) — sinon laisse à 0 pour forfait 240€",
+                "Montant mensuel prouvé (si < 240€) — sinon laisse à 0 pour forfait 240€",
                 min_value=0.0, value=0.0, step=10.0, key=f"coh_pf_m_{i}"
             )
             pf_handicap = st.checkbox(
-                f"Supplément(s) lié(s) au handicap (exonéré) ?", value=False, key=f"coh_pf_h_{i}"
+                "Supplément(s) lié(s) au handicap (exonéré) ?",
+                value=False, key=f"coh_pf_h_{i}"
             )
 
         cohs.append({
@@ -570,7 +625,7 @@ else:
 
 # ---------------- Avantage en nature ----------------
 st.divider()
-st.subheader("6) Avantage en nature (art. 33 AR)")
+st.subheader("6) Avantage en nature")
 answers["avantage_nature_logement"] = st.number_input(
     "Logement payé par un tiers non cohabitant (€/mois) – montant à compter",
     min_value=0.0, value=0.0, step=10.0
