@@ -1,18 +1,8 @@
 {
   "version": "1.0",
   "config": {
-    "ris_rates": {
-      "cohab": 876.13,
-      "isole": 1314.20,
-      "fam_charge": 1776.07
-    },
-    "immunisation_simple_annuelle": {
-      "cohab": 155,
-      "isole": 250,
-      "fam_charge": 310
-    },
-    "art34": {
-      "taux_a_laisser_mensuel": 876.13
-    }
+    "ris_rates": { "cohab": 876.13, "isole": 1314.20, "fam_charge": 1776.07 },
+    "immunisation_simple_annuelle": { "cohab": 155, "isole": 250, "fam_charge": 310 },
+    "art34": { "taux_a_laisser_mensuel": 876.13 }
   }
 }
