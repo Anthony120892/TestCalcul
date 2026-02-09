@@ -155,7 +155,6 @@ def capital_mobilier_monthly(total_capital: float,
 # - Hypothèque/viager: déduction plafonnée à 50% du RC-calculé (avant comparaison loyers)
 # ============================================================
 def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
-    # Exclure habitation principale et nue-propriété
     biens_countes = [
         b for b in (biens or [])
         if (not b.get("habitation_principale", False)) and (not b.get("nue_propriete", False))
@@ -176,28 +175,23 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
         frac = clamp01(b.get("fraction_droits", 1.0))
         rc_part = rc * frac
 
-        # Multipropriété: exo divisé par nb de biens du type
         if bati:
             exo_par_bien = ((exo_bati_total * frac) / nb_bati) if nb_bati > 0 else 0.0
         else:
             exo_par_bien = ((exo_non_bati_total * frac) / nb_non_bati) if nb_non_bati > 0 else 0.0
 
-        # Base RC-calculée (annuelle)
         base_rc = max(0.0, (rc_part - exo_par_bien) * coeff)
 
-        # Hypothèque: intérêts * fraction, plafonné à 50% du montant RC-calculé
         if b.get("hypotheque", False):
             interets = max(0.0, float(b.get("interets_annuels", 0.0))) * frac
             base_rc -= min(interets, 0.5 * base_rc)
 
-        # Viager: rente * fraction, plafonné à 50% du montant RC-calculé
         if b.get("viager", False):
             rente = max(0.0, float(b.get("rente_viagere_annuelle", 0.0))) * frac
             base_rc -= min(rente, 0.5 * base_rc)
 
         base_rc = max(0.0, base_rc)
 
-        # Revenus locatifs: si > base_rc, on prend les loyers (part du demandeur)
         bien_loue = bool(b.get("bien_loue", False))
         loyers_annuels = max(0.0, float(b.get("loyers_annuels", 0.0))) * frac
         base_finale = max(base_rc, loyers_annuels) if bien_loue else base_rc
@@ -256,22 +250,17 @@ def immunisation_simple_monthly(categorie: str, cfg_immu: dict) -> float:
     return float(cfg_immu.get(categorie, 0.0)) / 12.0
 
 # ============================================================
-# COHABITANTS — art.34 “ligne directe” (1er & 2e degré) + partenaire
-# + Prestations familiales (forfait 240€ si inconnu, sauf handicap)
+# COHABITANTS — art.34 (ligne directe 1er & 2e degré) + partenaire
+# - part_total = max(0, somme_revenus - N*taux_cat1)
+# - partage entre nb_demandeurs_menage (ex: 2 enfants demandeurs)
+# + Prestations familiales: forfait 240€ si inconnu, sauf handicap
 # ============================================================
-def cohabitants_part_monthly_art34(cohabitants: list, taux_cat1_mensuel: float) -> tuple[float, float, int]:
+def cohabitants_part_monthly_art34(cohabitants: list,
+                                  taux_cat1_mensuel: float,
+                                  nb_demandeurs_menage: int) -> tuple[float, float, int, float]:
     """
-    Retourne (part_cohabitants_a_compter, prestations_familiales_a_compter, n_pris_en_compte)
-
-    cohabitants: liste de dict:
-      {
-        "type": "partenaire" | "debiteur_direct_1" | "debiteur_direct_2" | "autre",
-        "revenus_annuels": float,
-        "exclu_equite": bool,
-        "prest_fam_apply": bool,
-        "prest_fam_montant": float,   # 0 si inconnu
-        "prest_fam_handicap": bool
-      }
+    Retourne:
+      (part_par_demandeur, prestations_familiales_a_compter, n_pris_en_compte, part_totale_avant_partage)
     """
     admissibles = {"partenaire", "debiteur_direct_1", "debiteur_direct_2"}
     pris = [
@@ -284,17 +273,18 @@ def cohabitants_part_monthly_art34(cohabitants: list, taux_cat1_mensuel: float) 
 
     total_rev_m = sum(max(0.0, float(c.get("revenus_annuels", 0.0))) / 12.0 for c in pris)
 
-    # Part à compter: on garantit 1 taux "catégorie 1 / cohabitant" par majeur pris en compte
-    part = max(0.0, total_rev_m - (n * taux_cat1))
+    part_total = max(0.0, total_rev_m - (n * taux_cat1))
 
-    # Prestations familiales (forfait 240€, sauf preuve < 240; suppléments handicap exonérés)
+    nb = max(1, int(nb_demandeurs_menage))
+    part_par_demandeur = part_total / nb
+
     prest = 0.0
     for c in pris:
         if bool(c.get("prest_fam_apply", False)) and not bool(c.get("prest_fam_handicap", False)):
             m = float(c.get("prest_fam_montant", 0.0))
             prest += m if (m > 0.0 and m < 240.0) else 240.0
 
-    return part, prest, n
+    return part_par_demandeur, prest, n, part_total
 
 # ============================================================
 # CALCUL GLOBAL
@@ -338,16 +328,20 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) Cohabitants art.34
+    # 5) Cohabitants art.34 + partage entre demandeurs
     cohab_part_m = 0.0
     prest_fam_m = 0.0
     n_coh = 0
+    part_total_coh = 0.0
 
     if cat in ("cohab", "fam_charge"):
         taux_cat1_m = float(cfg["ris_rates"].get("cohab", 0.0))
-        cohab_part_m, prest_fam_m, n_coh = cohabitants_part_monthly_art34(
+        nb_dem = int(answers.get("nb_demandeurs_menage", 1))
+
+        cohab_part_m, prest_fam_m, n_coh, part_total_coh = cohabitants_part_monthly_art34(
             cohabitants=answers.get("cohabitants_list", []),
-            taux_cat1_mensuel=taux_cat1_m
+            taux_cat1_mensuel=taux_cat1_m,
+            nb_demandeurs_menage=nb_dem
         )
 
     # 6) Avantage nature
@@ -370,8 +364,10 @@ def compute_all(answers: dict, engine: dict) -> dict:
         "revenus_demandeur_annuels": demandeur_annuel,
         "revenus_demandeur_mensuels": revenus_demandeur_m,
 
+        "nb_demandeurs_menage_pour_partage": int(answers.get("nb_demandeurs_menage", 1)),
         "cohabitants_n_pris_en_compte": n_coh,
-        "cohabitants_part_a_compter_mensuel": cohab_part_m,
+        "cohabitants_part_totale_avant_partage_mensuel": part_total_coh,
+        "cohabitants_part_a_compter_par_demandeur_mensuel": cohab_part_m,
         "prestations_familiales_a_compter_mensuel": prest_fam_m,
 
         "capitaux_mobiliers_mensuels": cap,
@@ -400,7 +396,7 @@ with col1:
     st.image("logo.png", use_container_width=True)
 with col2:
     st.title("Calcul RIS – Prototype (CPAS)")
-    st.caption("Immobilier (RC×3 ou loyers si >), épargne, cessions, cohabitants art.34 (ligne directe 2e degré), + prorata 1er mois")
+    st.caption("Immobilier (RC×3 ou loyers si >), épargne, cessions, cohabitants art.34 (ligne directe 2e degré) + partage entre demandeurs + prorata 1er mois")
 
 # ---------------- Sidebar paramètres ----------------
 with st.sidebar:
@@ -560,14 +556,21 @@ if a_ces:
         cessions.append({"valeur_venale": float(val), "usufruit": bool(usuf)})
     answers["cessions"] = cessions
 
-# ---------------- Cohabitants admissibles (art.34) ----------------
+# ---------------- Cohabitants admissibles (art.34) + partage entre demandeurs ----------------
 st.divider()
-st.subheader("5) Cohabitants admissibles (art. 34) — partenaire + ligne directe 1er/2e degré")
+st.subheader("5) Cohabitants admissibles (art. 34) — + partage entre demandeurs")
 answers["cohabitants_list"] = []
+answers["nb_demandeurs_menage"] = 1
 
 if answers["categorie"] in ("cohab", "fam_charge"):
     st.caption("Pris en compte: partenaire, ascendants/descendants en ligne directe (parent/enfant, grand-parent/petit-enfant).")
     st.caption("Les 'autres' (frère/soeur, oncle, ami, coloc…) ne sont PAS pris en compte.")
+    st.caption("⚠️ Si plusieurs enfants/jeunes sont demandeurs DIS dans le ménage, on partage la part calculée (comme dans ton exemple).")
+
+    answers["nb_demandeurs_menage"] = st.number_input(
+        "Nombre de demandeurs/bénéficiaires DIS à partager dans le ménage (ex: 2 enfants demandeurs)",
+        min_value=1, value=1, step=1
+    )
 
     nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=1, step=1)
     cohs = []
