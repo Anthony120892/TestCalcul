@@ -83,7 +83,7 @@ def normalize_engine(raw: dict) -> dict:
     return engine
 
 def load_engine() -> dict:
-    # ⚠️ Attention au nom du fichier : ris_rules.json (1 seul underscore)
+    # ⚠️ Nom attendu: ris_rules.json (un seul underscore)
     fname = "ris_rules.json"
     if os.path.exists(fname):
         with open(fname, "r", encoding="utf-8") as f:
@@ -108,7 +108,7 @@ def ris_first_month_amount(ris_mensuel: float, demande_date: date) -> float:
     return max(0.0, float(ris_mensuel)) * prorata_remaining_from_date(demande_date)
 
 # ============================================================
-# CAPITAUX MOBILIERS (art. 27 AR)
+# CAPITAUX MOBILIERS (art. 27 AR) — calc annuel via seuils annuels
 # ============================================================
 def capital_mobilier_monthly(total_capital: float,
                              compte_commun: bool,
@@ -145,14 +145,17 @@ def capital_mobilier_monthly(total_capital: float,
 
     return annuel / 12.0
 
+def capital_mobilier_annual(**kwargs) -> float:
+    return float(capital_mobilier_monthly(**kwargs)) * 12.0
+
 # ============================================================
-# IMMOBILIER
+# IMMOBILIER — retourne MENSUEL -> on annualise pour le mode CPAS
 # - RC non indexé: (RC - exo) * 3
 # - Si revenus locatifs > RC-calculé, on prend les loyers
 # - Habitation principale exclue
 # - Nue-propriété: non comptée (on ignore le bien)
 # - Indivision (fraction) prise en compte
-# - Hypothèque/viager: déduction plafonnée à 50% du RC-calculé (avant comparaison loyers)
+# - Hypothèque/viager: déduction plafonnée à 50% du RC-calculé
 # ============================================================
 def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
     biens_countes = [
@@ -200,8 +203,11 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
 
     return total_annuel / 12.0
 
+def immo_annual_total(biens: list, enfants: int, cfg_immo: dict) -> float:
+    return float(immo_monthly_total(biens=biens, enfants=enfants, cfg_immo=cfg_immo)) * 12.0
+
 # ============================================================
-# CESSION DE BIENS (art. 28 à 32 AR)
+# CESSION DE BIENS (art. 28 à 32 AR) — retourne mensuel -> annualisé
 # ============================================================
 def cession_biens_monthly(cessions: list,
                           cas_particulier_tranche_37200: bool,
@@ -243,24 +249,23 @@ def cession_biens_monthly(cessions: list,
 
     return annuel / 12.0
 
-# ============================================================
-# IMMUNISATION SIMPLE (art. 22 §2 AR) — mensuel
-# ============================================================
-def immunisation_simple_monthly(categorie: str, cfg_immu: dict) -> float:
-    return float(cfg_immu.get(categorie, 0.0)) / 12.0
+def cession_biens_annual(**kwargs) -> float:
+    return float(cession_biens_monthly(**kwargs)) * 12.0
 
 # ============================================================
-# COHABITANTS — art.34 (ligne directe 1er & 2e degré) + partenaire
-# - part_total = max(0, somme_revenus - N*taux_cat1)
-# - partage entre nb_demandeurs_menage (ex: 2 enfants demandeurs)
-# + Prestations familiales: forfait 240€ si inconnu, sauf handicap
+# COHABITANTS — MODE OFFICIEL CPAS (ANNUEL)
+# art.34 (ligne directe 1er & 2e degré) + partenaire
+# - part_total_annuel = max(0, somme_revenus_annuels - N*taux_cat1_annuel)
+# - partage entre nb_demandeurs_menage (ex: 2 demandeurs)
+# + Prestations familiales: forfait 240€/mois si inconnu, sauf handicap
+#   -> ici, ON COMPTE en ANNUEL (mensuel * 12)
 # ============================================================
-def cohabitants_part_monthly_art34(cohabitants: list,
-                                  taux_cat1_mensuel: float,
-                                  nb_demandeurs_menage: int) -> tuple[float, float, int, float]:
+def cohabitants_part_annual_art34(cohabitants: list,
+                                 taux_cat1_annuel: float,
+                                 nb_demandeurs_menage: int) -> tuple[float, float, int, float]:
     """
     Retourne:
-      (part_par_demandeur, prestations_familiales_a_compter, n_pris_en_compte, part_totale_avant_partage)
+      (part_par_demandeur_annuel, prestations_familiales_annuel, n_pris_en_compte, part_totale_avant_partage_annuel)
     """
     admissibles = {"partenaire", "debiteur_direct_1", "debiteur_direct_2"}
     pris = [
@@ -269,38 +274,41 @@ def cohabitants_part_monthly_art34(cohabitants: list,
     ]
 
     n = len(pris)
-    taux_cat1 = max(0.0, float(taux_cat1_mensuel))
+    taux_cat1_a = max(0.0, float(taux_cat1_annuel))
 
-    total_rev_m = sum(max(0.0, float(c.get("revenus_annuels", 0.0))) / 12.0 for c in pris)
-
-    part_total = max(0.0, total_rev_m - (n * taux_cat1))
+    total_rev_a = sum(max(0.0, float(c.get("revenus_annuels", 0.0))) for c in pris)
+    part_total_a = max(0.0, total_rev_a - (n * taux_cat1_a))
 
     nb = max(1, int(nb_demandeurs_menage))
-    part_par_demandeur = part_total / nb
+    part_par_dem_a = part_total_a / nb
 
-    prest = 0.0
+    pf_annuel = 0.0
     for c in pris:
+        # Par défaut, on NE COMPTE PAS. Si tu coches "prestations familiales à compter", on annualise.
         if bool(c.get("prest_fam_apply", False)) and not bool(c.get("prest_fam_handicap", False)):
             m = float(c.get("prest_fam_montant", 0.0))
-            prest += m if (m > 0.0 and m < 240.0) else 240.0
+            pf_m = m if (m > 0.0 and m < 240.0) else 240.0
+            pf_annuel += pf_m * 12.0
 
-    return part_par_demandeur, prest, n, part_total
+    return part_par_dem_a, pf_annuel, n, part_total_a
 
 # ============================================================
-# CALCUL GLOBAL
+# CALCUL GLOBAL — MODE OFFICIEL CPAS (ANNUEL)
+# Tout est calculé en ANNUEL, et on divise par 12 à la fin.
 # ============================================================
-def compute_all(answers: dict, engine: dict) -> dict:
+def compute_all_officiel_cpas_annuel(answers: dict, engine: dict) -> dict:
     cfg = engine["config"]
     cat = answers.get("categorie", "isole")
 
+    # Taux RIS annuel (dérivé du mensuel)
     taux_ris_m = float(cfg["ris_rates"].get(cat, 0.0))
+    taux_ris_a = taux_ris_m * 12.0
 
-    # 1) Revenus demandeur (ANNUEL -> mensuel)
-    demandeur_annuel = max(0.0, float(answers.get("demandeur_revenus_annuels", 0.0)))
-    revenus_demandeur_m = demandeur_annuel / 12.0
+    # 1) Revenus ménage demandeur (annuel) — (personne seule ou couple demandeur) => tu mets le total ici
+    revenus_demandeur_a = max(0.0, float(answers.get("demandeur_revenus_annuels", 0.0)))
 
-    # 2) Capitaux mobiliers
-    cap = capital_mobilier_monthly(
+    # 2) Capitaux mobiliers (annuel)
+    cap_a = capital_mobilier_annual(
         total_capital=answers.get("capital_mobilier_total", 0.0),
         compte_commun=answers.get("capital_compte_commun", False),
         nb_titulaires=answers.get("capital_nb_titulaires", 1),
@@ -310,15 +318,15 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 3) Immobilier
-    immo = immo_monthly_total(
+    # 3) Immobilier (annuel)
+    immo_a = immo_annual_total(
         biens=answers.get("biens_immobiliers", []),
         enfants=answers.get("enfants_a_charge", 0),
         cfg_immo=cfg["immo"]
     )
 
-    # 4) Cession
-    cession = cession_biens_monthly(
+    # 4) Cession (annuel)
+    cession_a = cession_biens_annual(
         cessions=answers.get("cessions", []),
         cas_particulier_tranche_37200=answers.get("cession_cas_particulier_37200", False),
         dettes_deductibles=answers.get("cession_dettes_deductibles", 0.0),
@@ -328,75 +336,105 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) Cohabitants art.34 + partage entre demandeurs
-    cohab_part_m = 0.0
-    prest_fam_m = 0.0
+    # 5) Cohabitants art.34 (annuel)
+    cohab_part_a = 0.0
+    prest_fam_a = 0.0
     n_coh = 0
-    part_total_coh = 0.0
+    part_total_coh_a = 0.0
 
     if cat in ("cohab", "fam_charge"):
-        taux_cat1_m = float(cfg["ris_rates"].get("cohab", 0.0))
+        # "taux catégorie 1" = taux cohab (mensuel) -> annualisé
+        taux_cat1_a = float(cfg["ris_rates"].get("cohab", 0.0)) * 12.0
         nb_dem = int(answers.get("nb_demandeurs_menage", 1))
 
-        cohab_part_m, prest_fam_m, n_coh, part_total_coh = cohabitants_part_monthly_art34(
+        cohab_part_a, prest_fam_a, n_coh, part_total_coh_a = cohabitants_part_annual_art34(
             cohabitants=answers.get("cohabitants_list", []),
-            taux_cat1_mensuel=taux_cat1_m,
+            taux_cat1_annuel=taux_cat1_a,
             nb_demandeurs_menage=nb_dem
         )
 
-    # 6) Avantage nature
-    avantage_nature = max(0.0, float(answers.get("avantage_nature_logement", 0.0)))
+    # 6) Avantage en nature (annuel)
+    avantage_nature_m = max(0.0, float(answers.get("avantage_nature_logement", 0.0)))
+    avantage_nature_a = avantage_nature_m * 12.0
 
-    total_avant = revenus_demandeur_m + cap + immo + cession + cohab_part_m + prest_fam_m + avantage_nature
+    total_avant_a = revenus_demandeur_a + cap_a + immo_a + cession_a + cohab_part_a + prest_fam_a + avantage_nature_a
 
-    # Immunisation simple si ressources < taux
-    immu_m = 0.0
-    if taux_ris_m > 0 and total_avant < taux_ris_m:
-        immu_m = immunisation_simple_monthly(cat, cfg["immunisation_simple_annuelle"])
+    # Immunisation simple (annuelle) si ressources < taux
+    immu_a = 0.0
+    if taux_ris_a > 0 and total_avant_a < taux_ris_a:
+        immu_a = float(cfg["immunisation_simple_annuelle"].get(cat, 0.0))
 
-    total_apres = max(0.0, total_avant - immu_m)
-    ris = max(0.0, taux_ris_m - total_apres) if taux_ris_m > 0 else 0.0
+    total_apres_a = max(0.0, total_avant_a - immu_a)
+    ris_a = max(0.0, taux_ris_a - total_apres_a) if taux_ris_a > 0 else 0.0
+
+    # Conversion mensuelle uniquement à la fin
+    revenus_demandeur_m = revenus_demandeur_a / 12.0
+    cap_m = cap_a / 12.0
+    immo_m = immo_a / 12.0
+    cession_m = cession_a / 12.0
+    cohab_part_m = cohab_part_a / 12.0
+    prest_fam_m = prest_fam_a / 12.0
+    avantage_nature_m = avantage_nature_a / 12.0
+    total_avant_m = total_avant_a / 12.0
+    immu_m = immu_a / 12.0
+    total_apres_m = total_apres_a / 12.0
+    ris_m = ris_a / 12.0
 
     return {
+        # Meta
+        "mode_calcul": "OFFICIEL_CPAS_ANNUEL",
         "categorie": cat,
         "enfants_a_charge": int(answers.get("enfants_a_charge", 0)),
-
-        "revenus_demandeur_annuels": demandeur_annuel,
-        "revenus_demandeur_mensuels": revenus_demandeur_m,
-
         "nb_demandeurs_menage_pour_partage": int(answers.get("nb_demandeurs_menage", 1)),
+
+        # Détails ANNUELS (comme tes feuilles)
+        "revenus_demandeur_annuels": revenus_demandeur_a,
+        "capitaux_mobiliers_annuels": cap_a,
+        "immo_annuels": immo_a,
+        "cession_biens_annuelle": cession_a,
         "cohabitants_n_pris_en_compte": n_coh,
-        "cohabitants_part_totale_avant_partage_mensuel": part_total_coh,
+        "cohabitants_part_totale_avant_partage_annuel": part_total_coh_a,
+        "cohabitants_part_a_compter_par_demandeur_annuel": cohab_part_a,
+        "prestations_familiales_a_compter_annuel": prest_fam_a,
+        "avantage_nature_logement_annuel": avantage_nature_a,
+
+        "total_ressources_avant_immunisation_simple_annuel": total_avant_a,
+        "taux_ris_annuel": taux_ris_a,
+        "immunisation_simple_annuelle": immu_a,
+        "total_ressources_apres_immunisation_simple_annuel": total_apres_a,
+        "ris_theorique_annuel": ris_a,
+
+        # Détails MENSUELS (pour affichage)
+        "revenus_demandeur_mensuels": revenus_demandeur_m,
+        "capitaux_mobiliers_mensuels": cap_m,
+        "immo_mensuels": immo_m,
+        "cession_biens_mensuelle": cession_m,
         "cohabitants_part_a_compter_par_demandeur_mensuel": cohab_part_m,
         "prestations_familiales_a_compter_mensuel": prest_fam_m,
+        "avantage_nature_logement_mensuel": avantage_nature_m,
 
-        "capitaux_mobiliers_mensuels": cap,
-        "immo_mensuels": immo,
-        "cession_biens_mensuelle": cession,
-        "avantage_nature_logement": avantage_nature,
-
-        "total_ressources_avant_immunisation_simple": total_avant,
+        "total_ressources_avant_immunisation_simple": total_avant_m,
         "taux_ris_mensuel": taux_ris_m,
         "immunisation_simple_mensuelle": immu_m,
-        "total_ressources_apres_immunisation_simple": total_apres,
-        "ris_theorique": ris
+        "total_ressources_apres_immunisation_simple": total_apres_m,
+        "ris_theorique": ris_m
     }
 
 # ============================================================
 # UI STREAMLIT
 # ============================================================
-st.set_page_config(page_title="Calcul RIS (prototype)", layout="centered")
+st.set_page_config(page_title="Calcul RIS (CPAS officiel annuel)", layout="centered")
 
 engine = load_engine()
 cfg = engine["config"]
 
-# ---------------- Logo + titre (header) ----------------
+# ---------------- Logo + titre ----------------
 col1, col2 = st.columns([1, 5])
 with col1:
     st.image("logo.png", use_container_width=True)
 with col2:
     st.title("Calcul RIS – Prototype (CPAS)")
-    st.caption("Immobilier (RC×3 ou loyers si >), épargne, cessions, cohabitants art.34 (ligne directe 2e degré) + partage entre demandeurs + prorata 1er mois")
+    st.caption("MODE OFFICIEL CPAS: calcul 100% ANNUEL puis /12 à la fin (comme tes feuilles) + prorata 1er mois")
 
 # ---------------- Sidebar paramètres ----------------
 with st.sidebar:
@@ -426,10 +464,10 @@ demande_date = st.date_input("Date de la demande", value=date.today())
 
 # ---------------- Revenus demandeur (ANNUEL) ----------------
 st.divider()
-st.subheader("1) Revenus du demandeur (nets) — ANNUELS")
-st.caption("Ici : uniquement le demandeur. Les cohabitants se mettent au point 5.")
+st.subheader("1) Revenus du ménage demandeur (nets) — ANNUELS")
+st.caption("Si un couple fait la demande: additionne les revenus des 2 demandeurs ici (total annuel).")
 answers["demandeur_revenus_annuels"] = st.number_input(
-    "Total annuel des revenus nets du demandeur (€/an)",
+    "Total annuel des revenus nets du ménage demandeur (€/an)",
     min_value=0.0, value=0.0, step=100.0
 )
 
@@ -457,7 +495,7 @@ if a_cap:
 # ---------------- Biens immobiliers ----------------
 st.divider()
 st.subheader("3) Biens immobiliers")
-st.caption("Calcul: (RC non indexé – exonération) × 3. Si le bien est loué et que les loyers > RC×3, on prend les loyers.")
+st.caption("Calcul: (RC non indexé – exonération) × 3. Si bien loué et loyers > RC×3, on prend les loyers.")
 st.caption("Nue-propriété: non comptée. Habitation principale: non comptée.")
 biens = []
 a_immo = st.checkbox("Le demandeur possède des biens immobiliers")
@@ -524,7 +562,6 @@ if a_immo:
             "viager": bool(viager),
             "rente_viagere_annuelle": float(rente)
         })
-
 answers["biens_immobiliers"] = biens
 
 # ---------------- Cession de biens ----------------
@@ -556,7 +593,7 @@ if a_ces:
         cessions.append({"valeur_venale": float(val), "usufruit": bool(usuf)})
     answers["cessions"] = cessions
 
-# ---------------- Cohabitants admissibles (art.34) + partage entre demandeurs ----------------
+# ---------------- Cohabitants admissibles (art.34) + partage ----------------
 st.divider()
 st.subheader("5) Cohabitants admissibles (art. 34) — + partage entre demandeurs")
 answers["cohabitants_list"] = []
@@ -565,10 +602,10 @@ answers["nb_demandeurs_menage"] = 1
 if answers["categorie"] in ("cohab", "fam_charge"):
     st.caption("Pris en compte: partenaire, ascendants/descendants en ligne directe (parent/enfant, grand-parent/petit-enfant).")
     st.caption("Les 'autres' (frère/soeur, oncle, ami, coloc…) ne sont PAS pris en compte.")
-    st.caption("⚠️ Si plusieurs enfants/jeunes sont demandeurs DIS dans le ménage, on partage la part calculée (comme dans ton exemple).")
+    st.caption("⚠️ Si plusieurs demandeurs DIS dans le ménage, on partage la part calculée (comme tes feuilles).")
 
     answers["nb_demandeurs_menage"] = st.number_input(
-        "Nombre de demandeurs/bénéficiaires DIS à partager dans le ménage (ex: 2 enfants demandeurs)",
+        "Nombre de demandeurs/bénéficiaires DIS à partager dans le ménage",
         min_value=1, value=1, step=1
     )
 
@@ -596,8 +633,9 @@ if answers["categorie"] in ("cohab", "fam_charge"):
         )
 
         st.markdown("**Prestations familiales en faveur du demandeur (perçues par ce cohabitant)**")
+        st.caption("⚠️ Ne coche que si ces prestations doivent être COMPTÉES (sinon laisse décoché).")
         pf_apply = st.checkbox(
-            "Oui, il/elle perçoit des prestations familiales pour le demandeur",
+            "Oui, prestations familiales À COMPTER pour le demandeur",
             value=False, key=f"coh_pf_{i}"
         )
 
@@ -637,7 +675,7 @@ answers["avantage_nature_logement"] = st.number_input(
 # ---------------- Calcul ----------------
 st.divider()
 if st.button("Calculer le RIS"):
-    res = compute_all(answers, engine)
+    res = compute_all_officiel_cpas_annuel(answers, engine)
     ris_m = float(res["ris_theorique"])
 
     # Prorata 1er mois
@@ -655,7 +693,7 @@ if st.button("Calculer le RIS"):
     st.caption(f"Prorata = {jours_restants}/{dim} = {prorata:.6f} (jour de demande inclus)")
     st.write(f"**Mois suivants :** {ris_m:.2f} €/mois (RIS complet)")
 
-    st.write("### Détail (mensuel)")
+    st.write("### Détail (CPAS officiel — ANNUEL puis mensuel)")
     res["date_demande"] = str(demande_date)
     res["jours_dans_mois"] = dim
     res["jours_restants_inclus"] = jours_restants
