@@ -1,9 +1,11 @@
 import json
 import os
+import calendar
+from datetime import date
 import streamlit as st
 
 # ============================================================
-# CONFIG PAR DÉFAUT (complet) — on fusionne avec ris_rules.json
+# CONFIG PAR DÉFAUT — fusionnable avec ris_rules.json
 # ============================================================
 DEFAULT_ENGINE = {
     "version": "1.0",
@@ -31,21 +33,12 @@ DEFAULT_ENGINE = {
             "coeff_rc": 3.0
         },
 
-        # Exonérations socio-pro (immunisation double) — paramètres “indexables”
-        "socio_prof": {
-            "max_mensuel": 274.82,          # exo socio-pro max / mois
-            "artistique_annuel": 3297.80,   # exo artistique irrégulier / an
-        },
-
-        # Cession de biens (art. 28 à 32 AR) — version “moteur”
+        # Cession de biens (art. 28 à 32 AR)
         "cession": {
             "tranche_immunisee": 37200.0,
             "usufruit_ratio": 0.40,
             "abattements_annuels": {"cat1": 1250.0, "cat2": 2000.0, "cat3": 2500.0}
-        },
-
-        # ALE
-        "ale": {"exon_mensuelle": 4.10}
+        }
     }
 }
 
@@ -67,7 +60,7 @@ def deep_merge(base: dict, override: dict) -> dict:
 
 def normalize_engine(raw: dict) -> dict:
     """
-    Rend ton ris_rules.json minimal compatible avec le moteur complet.
+    Rend ton ris_rules.json minimal compatible avec le moteur.
     - gère les anciens noms (exonerations -> immo)
     - complète les sections manquantes
     """
@@ -95,6 +88,22 @@ def load_engine() -> dict:
             raw = json.load(f)
         return normalize_engine(raw)
     return normalize_engine(DEFAULT_ENGINE)
+
+# ---- Prorata 1er mois ----
+def days_in_month(d: date) -> int:
+    return calendar.monthrange(d.year, d.month)[1]
+
+def prorata_remaining_from_date(d: date) -> float:
+    """
+    Prorata basé sur les jours RESTANTS dans le mois, jour de la demande inclus.
+    ex: demande le 10 -> paiement du 10 au dernier jour inclus.
+    """
+    dim = days_in_month(d)
+    remaining = dim - d.day + 1
+    return remaining / dim
+
+def ris_first_month_amount(ris_mensuel: float, demande_date: date) -> float:
+    return max(0.0, float(ris_mensuel)) * prorata_remaining_from_date(demande_date)
 
 # ============================================================
 # CAPITAUX MOBILIERS (art. 27 AR)
@@ -147,15 +156,13 @@ def capital_mobilier_monthly(total_capital: float,
     return annuel / 12.0
 
 # ============================================================
-# IMMOBILIER (RC non indexé) — avec multipropriété + indivision + hypo/viager (plafond 50%)
+# IMMOBILIER (RC non indexé) — multipropriété + indivision + hypo/viager (plafond 50%)
 # ============================================================
 def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
     biens_countes = [b for b in biens if not b.get("habitation_principale", False)]
 
     nb_bati = sum(1 for b in biens_countes if b.get("bati", True))
     nb_non_bati = sum(1 for b in biens_countes if not b.get("bati", True))
-    nb_bati = nb_bati if nb_bati > 0 else 0
-    nb_non_bati = nb_non_bati if nb_non_bati > 0 else 0
 
     exo_bati_total = float(cfg_immo["bati_base"]) + float(cfg_immo["bati_par_enfant"]) * max(0, int(enfants))
     exo_non_bati_total = float(cfg_immo["non_bati_base"])
@@ -173,15 +180,9 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
 
         # Multipropriété: exo divisé par nb de biens du type
         if bati:
-            if nb_bati == 0:
-                exo_par_bien = 0.0
-            else:
-                exo_par_bien = (exo_bati_total * frac) / nb_bati
+            exo_par_bien = ((exo_bati_total * frac) / nb_bati) if nb_bati > 0 else 0.0
         else:
-            if nb_non_bati == 0:
-                exo_par_bien = 0.0
-            else:
-                exo_par_bien = (exo_non_bati_total * frac) / nb_non_bati
+            exo_par_bien = ((exo_non_bati_total * frac) / nb_non_bati) if nb_non_bati > 0 else 0.0
 
         base = max(0.0, (rc_part - exo_par_bien) * coeff)
 
@@ -200,10 +201,9 @@ def immo_monthly_total(biens: list, enfants: int, cfg_immo: dict) -> float:
     return total_annuel / 12.0
 
 # ============================================================
-# CESSION DE BIENS (art. 28 à 32 AR) — version “moteur”
+# CESSION DE BIENS (art. 28 à 32 AR)
 # ============================================================
 def cession_biens_monthly(cessions: list,
-                          categorie: str,
                           cas_particulier_tranche_37200: bool,
                           dettes_deductibles: float,
                           abatt_cat: str,
@@ -211,12 +211,12 @@ def cession_biens_monthly(cessions: list,
                           cfg_cession: dict,
                           cfg_cap: dict) -> float:
     """
-    - on totalise les valeurs (si plusieurs cessions: tranches 1 seule fois sur total)
-    - usufruit => 40% (si coché)
+    - totalise les valeurs (si plusieurs cessions: tranches 1 seule fois sur total)
+    - usufruit => ratio (si coché)
     - dettes déductibles => option manuelle (si conditions remplies)
     - tranche immunisée 37.200 => option manuelle (cas particulier)
     - abattement annuel proratisé
-    - puis calcul par tranches comme capitaux mobiliers
+    - puis calcul par tranches comme capitaux mobiliers (seuils complets)
     """
     total = 0.0
     for c in cessions:
@@ -253,47 +253,24 @@ def cession_biens_monthly(cessions: list,
     return annuel / 12.0
 
 # ============================================================
-# REVENUS (exo socio-pro simplifiée)
-# ============================================================
-def revenus_mensuels_total(revenus: list, cfg_soc: dict) -> float:
-    total = 0.0
-    for r in revenus:
-        m = max(0.0, float(r.get("montant_mensuel", 0.0)))
-        t = r.get("type", "standard")
-        eligible = bool(r.get("eligible", True))
-
-        if t in ("socio_prof", "etudiant") and eligible:
-            ded = min(float(cfg_soc["max_mensuel"]), m)
-            total += max(0.0, m - ded)
-        elif t == "artistique_irregulier" and eligible:
-            ded_m = float(cfg_soc["artistique_annuel"]) / 12.0
-            total += max(0.0, m - min(ded_m, m))
-        elif t == "ale":
-            total += max(0.0, float(r.get("ale_part_excedentaire", 0.0)))
-        else:
-            total += m
-    return total
-
-# ============================================================
 # IMMUNISATION SIMPLE (art. 22 §2 AR) — mensuel
 # ============================================================
 def immunisation_simple_monthly(categorie: str, cfg_immu: dict) -> float:
     return float(cfg_immu.get(categorie, 0.0)) / 12.0
 
 # ============================================================
-# COHABITANT — version calée sur les décisions CPAS que tu as fournies
+# COHABITANTS — mode CPAS (comme tes décisions)
 # ============================================================
-def cohabitant_monthly_cpasmode(cohabitant_revenus_annuels: float,
-                                categorie_demandeur: str,
+def cohabitant_monthly_cpasmode(cohabitants_revenus_annuels_total: float,
                                 taux_annuel_reference: float,
                                 immun_simple_annuelle_cohab: float,
                                 appliquer_division_par_2: bool = True) -> float:
     """
-    Logique observée dans la décision:
-      (revenus_cohabitant_annuels - taux_reference_annuel) / 2 - immunisation_simple_cohab
-    où taux_reference_annuel = "cat.E" (dans tes annexes: 21.312,87/an)
+    Logique observée:
+      (revenus_cohabitants_annuels - taux_reference_annuel) / 2 - immunisation_simple_cohab
+    où taux_reference_annuel souvent = RIS "famille à charge" annuel (cat.E dans tes annexes).
     """
-    r = max(0.0, float(cohabitant_revenus_annuels))
+    r = max(0.0, float(cohabitants_revenus_annuels_total))
     ref = max(0.0, float(taux_annuel_reference))
     immu = max(0.0, float(immun_simple_annuelle_cohab))
 
@@ -304,19 +281,20 @@ def cohabitant_monthly_cpasmode(cohabitant_revenus_annuels: float,
     return base / 12.0
 
 # ============================================================
-# CALCUL GLOBAL
+# CALCUL GLOBAL (avec champs ANNUELS séparés demandeur/cohabitants)
 # ============================================================
 def compute_all(answers: dict, engine: dict) -> dict:
     cfg = engine["config"]
-
     cat = answers.get("categorie", "isole")
+
     taux_ris_m = float(cfg["ris_rates"].get(cat, 0.0))
     taux_ris_annuel = taux_ris_m * 12.0
 
-    # 1) revenus demandeur
-    revenus = revenus_mensuels_total(answers.get("revenus", []), cfg["socio_prof"])
+    # 1) Revenus demandeur (ANNUEl -> mensuel)
+    demandeur_annuel = max(0.0, float(answers.get("demandeur_revenus_annuels", 0.0)))
+    revenus_demandeur_m = demandeur_annuel / 12.0
 
-    # 2) capitaux mobiliers
+    # 2) Capitaux mobiliers
     cap = capital_mobilier_monthly(
         total_capital=answers.get("capital_mobilier_total", 0.0),
         compte_commun=answers.get("capital_compte_commun", False),
@@ -327,17 +305,16 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 3) immobilier
+    # 3) Immobilier
     immo = immo_monthly_total(
         biens=answers.get("biens_immobiliers", []),
         enfants=answers.get("enfants_a_charge", 0),
         cfg_immo=cfg["immo"]
     )
 
-    # 4) cession
+    # 4) Cession
     cession = cession_biens_monthly(
         cessions=answers.get("cessions", []),
-        categorie=cat,
         cas_particulier_tranche_37200=answers.get("cession_cas_particulier_37200", False),
         dettes_deductibles=answers.get("cession_dettes_deductibles", 0.0),
         abatt_cat=answers.get("cession_abatt_cat", "cat1"),
@@ -346,37 +323,37 @@ def compute_all(answers: dict, engine: dict) -> dict:
         cfg_cap=cfg["capital_mobilier"]
     )
 
-    # 5) cohabitant — MODE “CPAS décision”
-    cohab_mode = answers.get("cohab_mode", "cpas")
+    # 5) Cohabitants (ANNUEl -> part mensuelle à compter)
+    # Sécurité: si isolé, on ignore totalement
     cohab_m = 0.0
-    if cohab_mode == "cpas":
-        # Ici tu encodes le cohabitant en ANNUEL, comme dans les décisions
-        revenus_cohab_ann = float(answers.get("cohabitant_annuel_total", 0.0))
+    cohabitants_annuels_total = 0.0
 
-        # Le "taux de référence" dans tes décisions correspond à 21.312,87/an (cat.E),
-        # c’est le RIS "personne avec charge de famille" annuel.
-        # On le prend depuis le taux fam_charge (mensuel) si tu l’as encodé,
-        # sinon tu peux forcer un champ manuel.
-        ref_annuel_auto = float(cfg["ris_rates"].get("fam_charge", 0.0)) * 12.0
-        ref_annuel = float(answers.get("cohabitant_ref_annuel", ref_annuel_auto))
+    if cat in ("cohab", "fam_charge"):
+        cohabitants_list = answers.get("cohabitants_revenus_annuels_list", []) or []
+        cohabitants_annuels_total = sum(max(0.0, float(x)) for x in cohabitants_list)
 
+        # Référence annuelle (auto depuis taux fam_charge si encodé, sinon fallback)
+        ref_auto = float(cfg["ris_rates"].get("fam_charge", 0.0)) * 12.0
+        if ref_auto <= 0:
+            ref_auto = 21312.87  # fallback utile si l'utilisateur n'a pas encodé les taux
+
+        ref_annuel = float(answers.get("cohabitant_ref_annuel", ref_auto))
         immu_cohab_ann = float(cfg["immunisation_simple_annuelle"].get("cohab", 155.0))
         div2 = bool(answers.get("cohabitant_div2", True))
 
         cohab_m = cohabitant_monthly_cpasmode(
-            cohabitant_revenus_annuels=revenus_cohab_ann,
-            categorie_demandeur=cat,
+            cohabitants_revenus_annuels_total=cohabitants_annuels_total,
             taux_annuel_reference=ref_annuel,
             immun_simple_annuelle_cohab=immu_cohab_ann,
             appliquer_division_par_2=div2
         )
 
-    # 6) avantage nature
+    # 6) Avantage nature
     avantage_nature = max(0.0, float(answers.get("avantage_nature_logement", 0.0)))
 
-    total_avant = revenus + cap + immo + cession + cohab_m + avantage_nature
+    total_avant = revenus_demandeur_m + cap + immo + cession + cohab_m + avantage_nature
 
-    # immunisation simple si ressources < taux
+    # Immunisation simple si ressources < taux
     immu_m = 0.0
     if taux_ris_m > 0 and total_avant < taux_ris_m:
         immu_m = immunisation_simple_monthly(cat, cfg["immunisation_simple_annuelle"])
@@ -385,12 +362,20 @@ def compute_all(answers: dict, engine: dict) -> dict:
     ris = max(0.0, taux_ris_m - total_apres) if taux_ris_m > 0 else 0.0
 
     return {
-        "revenus_mensuels_apres_exonerations": revenus,
+        "categorie": cat,
+        "enfants_a_charge": int(answers.get("enfants_a_charge", 0)),
+
+        "revenus_demandeur_annuels": demandeur_annuel,
+        "revenus_demandeur_mensuels": revenus_demandeur_m,
+
+        "cohabitants_revenus_annuels_total": cohabitants_annuels_total,
+        "cohabitant_part_a_compter_mensuel": cohab_m,
+
         "capitaux_mobiliers_mensuels": cap,
         "immo_mensuels": immo,
         "cession_biens_mensuelle": cession,
-        "cohabitant_part_a_compter_mensuel": cohab_m,
         "avantage_nature_logement": avantage_nature,
+
         "total_ressources_avant_immunisation_simple": total_avant,
         "taux_ris_mensuel": taux_ris_m,
         "immunisation_simple_mensuelle": immu_m,
@@ -402,8 +387,8 @@ def compute_all(answers: dict, engine: dict) -> dict:
 # UI STREAMLIT
 # ============================================================
 st.set_page_config(page_title="Calcul RIS (prototype)", layout="centered")
-st.title("Calcul RIS – Prototype (moteur robuste + mode CPAS)")
-st.caption("Tu encodes → le moteur calcule. Et surtout: il ne crashe plus si le JSON est minimal 😄")
+st.title("Calcul RIS – Prototype (annuel demandeur + annuel cohabitants + prorata 1er mois)")
+st.caption("Encodage clair (pas de double comptage) + calcul du 1er mois au prorata des jours restants 😄")
 
 engine = load_engine()
 cfg = engine["config"]
@@ -412,53 +397,46 @@ cfg = engine["config"]
 with st.sidebar:
     st.subheader("Paramètres")
     st.write("**Taux RIS mensuels officiels** :")
-    cfg["ris_rates"]["cohab"] = st.number_input("Taux RIS cohabitant (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["cohab"]))
-    cfg["ris_rates"]["isole"] = st.number_input("Taux RIS isolé (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["isole"]))
-    cfg["ris_rates"]["fam_charge"] = st.number_input("Taux RIS famille à charge (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["fam_charge"]))
-
-    st.divider()
-    st.write("**Montants indexables**")
-    cfg["socio_prof"]["max_mensuel"] = st.number_input("Exo socio-pro max (€/mois)", min_value=0.0, value=float(cfg["socio_prof"]["max_mensuel"]))
-    cfg["socio_prof"]["artistique_annuel"] = st.number_input("Exo artistique irrégulier (€/an)", min_value=0.0, value=float(cfg["socio_prof"]["artistique_annuel"]))
+    cfg["ris_rates"]["cohab"] = st.number_input(
+        "Taux RIS cohabitant (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["cohab"])
+    )
+    cfg["ris_rates"]["isole"] = st.number_input(
+        "Taux RIS isolé (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["isole"])
+    )
+    cfg["ris_rates"]["fam_charge"] = st.number_input(
+        "Taux RIS famille à charge (€/mois)", min_value=0.0, value=float(cfg["ris_rates"]["fam_charge"])
+    )
 
     st.divider()
     st.write("**Immunisation simple (€/an)**")
-    cfg["immunisation_simple_annuelle"]["cohab"] = st.number_input("Immunisation simple cohab (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["cohab"]))
-    cfg["immunisation_simple_annuelle"]["isole"] = st.number_input("Immunisation simple isolé (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["isole"]))
-    cfg["immunisation_simple_annuelle"]["fam_charge"] = st.number_input("Immunisation simple fam. charge (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["fam_charge"]))
+    cfg["immunisation_simple_annuelle"]["cohab"] = st.number_input(
+        "Immunisation simple cohab (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["cohab"])
+    )
+    cfg["immunisation_simple_annuelle"]["isole"] = st.number_input(
+        "Immunisation simple isolé (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["isole"])
+    )
+    cfg["immunisation_simple_annuelle"]["fam_charge"] = st.number_input(
+        "Immunisation simple fam. charge (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["fam_charge"])
+    )
 
 # ---------------- Answers ----------------
 answers = {}
 answers["categorie"] = st.selectbox("Catégorie", ["cohab", "isole", "fam_charge"])
 answers["enfants_a_charge"] = st.number_input("Enfants à charge", min_value=0, value=0, step=1)
 
-# ---------------- Revenus ----------------
+# ---------------- Date demande (pour prorata) ----------------
 st.divider()
-st.subheader("1) Revenus mensuels (nets) – avec exonérations socio-pro")
-revenus = []
-nb_rev = st.number_input("Nombre de revenus à encoder", min_value=0, value=1, step=1)
-for i in range(int(nb_rev)):
-    st.markdown(f"**Revenu {i+1}**")
-    c1, c2, c3 = st.columns([2, 1, 1])
-    label = c1.text_input(f"Type/label (revenu {i+1})", value="salaire/chômage", key=f"rev_label_{i}")
-    montant = c2.number_input(f"Montant net (€/mois) {i+1}", min_value=0.0, value=0.0, step=10.0, key=f"rev_m_{i}")
-    typ = c3.selectbox(f"Règle {i+1}", ["standard", "socio_prof", "etudiant", "artistique_irregulier", "ale"], key=f"rev_t_{i}")
+st.subheader("Date de la demande (pour calcul du 1er mois)")
+demande_date = st.date_input("Date de la demande", value=date.today())
 
-    eligible = True
-    ale_part_exc = 0.0
-    if typ in ("socio_prof", "etudiant", "artistique_irregulier"):
-        eligible = st.checkbox(f"Éligible à l’exonération ? (revenu {i+1})", value=True, key=f"rev_el_{i}")
-    if typ == "ale":
-        ale_part_exc = st.number_input(f"Part ALE à compter (>4,10€) (€/mois) {i+1}", min_value=0.0, value=0.0, step=1.0, key=f"rev_ale_{i}")
-
-    revenus.append({
-        "label": label,
-        "montant_mensuel": float(montant),
-        "type": typ,
-        "eligible": eligible,
-        "ale_part_excedentaire": float(ale_part_exc)
-    })
-answers["revenus"] = revenus
+# ---------------- Revenus demandeur (ANNUEL) ----------------
+st.divider()
+st.subheader("1) Revenus du demandeur (nets) — ANNUELS")
+st.caption("Ici : uniquement le demandeur. Les cohabitants se mettent au point 5.")
+answers["demandeur_revenus_annuels"] = st.number_input(
+    "Total annuel des revenus nets du demandeur (€/an)",
+    min_value=0.0, value=0.0, step=100.0
+)
 
 # ---------------- Capitaux ----------------
 st.divider()
@@ -550,25 +528,38 @@ if a_ces:
         cessions.append({"valeur_venale": float(val), "usufruit": usuf})
     answers["cessions"] = cessions
 
-# ---------------- Cohabitant (mode CPAS) ----------------
+# ---------------- Cohabitants (ANNUELS) ----------------
 st.divider()
-st.subheader("5) Ressources du cohabitant — mode CPAS (comme tes décisions)")
+st.subheader("5) Revenus nets ANNUELS des cohabitants (0, 1, 2, …) — mode CPAS")
+answers["cohabitants_revenus_annuels_list"] = []
+answers["cohabitant_ref_annuel"] = 0.0
+answers["cohabitant_div2"] = True
 
-answers["cohab_mode"] = "cpas"
+if answers["categorie"] in ("cohab", "fam_charge"):
+    st.caption("Ici : uniquement les cohabitants (autres personnes du ménage), pas le demandeur.")
 
-answers["cohabitant_annuel_total"] = st.number_input(
-    "Total annuel des ressources du cohabitant (€/an) (ex: salaire+mutuelle)",
-    min_value=0.0, value=0.0, step=100.0
-)
+    nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=1, step=1)
+    cohs = []
+    for i in range(int(nb_coh)):
+        cohs.append(
+            st.number_input(
+                f"Revenus nets annuels Cohabitant {i+1} (€/an)",
+                min_value=0.0, value=0.0, step=100.0, key=f"coh_ann_{i}"
+            )
+        )
+    answers["cohabitants_revenus_annuels_list"] = [float(x) for x in cohs]
 
-# Référence annuelle (souvent = RIS famille à charge annuel, ex 21.312,87/an)
-ref_auto = float(cfg["ris_rates"]["fam_charge"]) * 12.0
-answers["cohabitant_ref_annuel"] = st.number_input(
-    "Référence annuelle à déduire (€/an) (souvent = RIS 'famille à charge' annuel)",
-    min_value=0.0, value=float(ref_auto), step=100.0
-)
+    ref_auto = float(cfg["ris_rates"]["fam_charge"]) * 12.0
+    if ref_auto <= 0:
+        ref_auto = 21312.87  # fallback si taux non encodés
 
-answers["cohabitant_div2"] = st.checkbox("Diviser par 2 (ménage à 2)", value=True)
+    answers["cohabitant_ref_annuel"] = st.number_input(
+        "Référence annuelle à déduire (€/an) (souvent = RIS 'famille à charge' annuel)",
+        min_value=0.0, value=float(ref_auto), step=100.0
+    )
+    answers["cohabitant_div2"] = st.checkbox("Diviser par 2 (ménage à 2)", value=True)
+else:
+    st.info("Catégorie 'isolé' : pas de cohabitant à encoder ✅")
 
 # ---------------- Avantage en nature ----------------
 st.divider()
@@ -582,7 +573,29 @@ answers["avantage_nature_logement"] = st.number_input(
 st.divider()
 if st.button("Calculer le RIS"):
     res = compute_all(answers, engine)
+    ris_m = float(res["ris_theorique"])
+
+    # Prorata 1er mois
+    prorata = prorata_remaining_from_date(demande_date)
+    ris_m1 = ris_first_month_amount(ris_m, demande_date)
+
     st.success("Calcul terminé ✅")
-    st.metric("RIS théorique (€/mois)", f"{res['ris_theorique']:.2f}")
+
+    st.metric("RIS mensuel normal (€/mois)", f"{ris_m:.2f}")
+
+    st.write("### Versement")
+    st.metric("RIS du 1er mois (prorata) (mois en cours)", f"{ris_m1:.2f}")
+    dim = days_in_month(demande_date)
+    jours_restants = dim - demande_date.day + 1
+    st.caption(f"Prorata = {jours_restants}/{dim} = {prorata:.6f} (jour de demande inclus)")
+
+    st.write(f"**Mois suivants :** {ris_m:.2f} €/mois (RIS complet)")
+
     st.write("### Détail (mensuel)")
+    res["date_demande"] = str(demande_date)
+    res["jours_dans_mois"] = dim
+    res["jours_restants_inclus"] = jours_restants
+    res["prorata_premier_mois"] = prorata
+    res["ris_premier_mois_prorata"] = ris_m1
+    res["ris_mois_suivants"] = ris_m
     st.json(res)
