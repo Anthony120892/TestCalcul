@@ -43,7 +43,7 @@ DEFAULT_ENGINE = {
 
         # Exonérations socio-pro (mensuel / annuel)
         "socio_prof": {
-            "max_mensuel": 274.82,
+            "max_mensuel": 309.48,
             "artistique_annuel": 3297.80,
         },
 
