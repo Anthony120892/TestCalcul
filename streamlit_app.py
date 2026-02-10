@@ -335,11 +335,12 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
 # ============================================================
 # ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
 # ============================================================
-def make_pool_key(degree: int, ids: list, include_ris_from: list) -> str:
-    # clé stable
-    a = ",".join(sorted([str(x) for x in ids]))
-    b = ",".join(sorted([str(x) for x in include_ris_from or []]))
-    return f"deg{degree}|ids[{a}]|ris[{b}]"
+def make_pool_key(ids: list) -> str:
+    # Pool UNIQUE par groupe de débiteurs (feuilles CPAS) :
+    # - ne dépend PAS du degré
+    # - ne dépend PAS de l'injection RI
+    a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
+    return f"ids[{a}]"
 
 
 def art34_group_excess_m(debtors: list, taux: float, extra_income_m: float = 0.0) -> float:
@@ -359,7 +360,9 @@ def art34_draw_from_pool(degree: int,
                          include_ris_from: list) -> dict:
     ids = list(debtor_ids or [])
     debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
-    key = make_pool_key(degree, ids, include_ris_from)
+
+    # Pool unique (ne dépend PAS du degré ni de l'injection)
+    key = make_pool_key(ids)
 
     base = art34_group_excess_m(debtors, taux, extra_income_m=include_ris_m)
 
@@ -1006,29 +1009,26 @@ if multi_mode:
     if st.button("Calculer (multi)"):
         taux_art34 = float(cfg["art34"]["taux_a_laisser_mensuel"])
 
-        # pools art34 (pour éviter le double comptage) + plan de partage (cas E6)
-        pools = {}
+        # plan de partage (cas E6)
         share_plan = {}
 
         if advanced_household:
-            # Pré-calcul partage: pour chaque groupe deg1 identique + mêmes injections, si plusieurs dossiers "share_art34"
+            # Pré-calcul partage: pour chaque groupe deg1 identique, si plusieurs dossiers "share_art34"
             for d in dossiers:
                 if not d.get("share_art34", False):
                     continue
                 ids = list(d.get("art34_deg1_ids", []) or [])
                 if not ids:
                     continue
-                key = make_pool_key(1, ids, d.get("include_ris_from_dossiers", []))
+                key = make_pool_key(ids)
                 if key not in share_plan:
                     share_plan[key] = {"count": 0, "per": 0.0}
                 share_plan[key]["count"] += 1
 
             # fixer "per" = base_exces / count (calculé sur la base du ménage, sans dépendre de l’ordre)
             for key, v in list(share_plan.items()):
-                # recomposer ids depuis la clé (simple parsing)
                 try:
-                    seg = key.split("|")[1]  # ids[...]
-                    ids_str = seg.replace("ids[", "").replace("]", "")
+                    ids_str = key.replace("ids[", "").replace("]", "")
                     ids = [x for x in ids_str.split(",") if x]
                 except Exception:
                     ids = []
@@ -1037,90 +1037,103 @@ if multi_mode:
                 if v["count"] > 0:
                     v["per"] = r2(float(base) / float(v["count"]))
 
-        results = []
+        # --- boucle de stabilisation : évite dépendance à l'ordre (injection RI) ---
         prior_results = [None] * len(dossiers)
 
-        for d in dossiers:
-            answers = dict(menage_common)
-            answers.update({
-                "categorie": d["categorie"],
-                "enfants_a_charge": d["enfants_a_charge"],
-                "date_demande": d["date_demande"],
-                "couple_demandeur": d["couple_demandeur"],
-                "revenus_demandeur_annuels": d["revenus_demandeur_annuels"],
-                "revenus_conjoint_annuels": d["revenus_conjoint_annuels"],
-                "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
-            })
+        for _iter in range(4):  # 3-4 passes suffisent en pratique
+            pools = {}  # IMPORTANT: reset pool à chaque passe (recalcul propre)
+            results_tmp = [None] * len(dossiers)
 
-            if advanced_household:
-                # calc art34 avancé, puis injecte dans answers en “cohabitants_part…”
-                art34_adv = compute_art34_menage_avance(
-                    dossier=d,
-                    household=household,
-                    taux=taux_art34,
-                    pools=pools,
-                    share_plan=share_plan,
-                    prior_results=prior_results
-                )
+            for d in dossiers:
+                answers = dict(menage_common)
+                answers.update({
+                    "categorie": d["categorie"],
+                    "enfants_a_charge": d["enfants_a_charge"],
+                    "date_demande": d["date_demande"],
+                    "couple_demandeur": d["couple_demandeur"],
+                    "revenus_demandeur_annuels": d["revenus_demandeur_annuels"],
+                    "revenus_conjoint_annuels": d["revenus_conjoint_annuels"],
+                    "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
+                })
 
-                # on fabrique un res "classique" en contournant le simple art34:
-                # -> on calcule d'abord comme d'habitude, puis on remplace les champs art34
-                res = compute_officiel_cpas_annuel(answers, engine)
-                res["art34_mode"] = art34_adv["art34_mode"]
-                res["art34_degree_utilise"] = art34_adv["art34_degree_utilise"]
-                res["ris_injecte_mensuel"] = art34_adv["ris_injecte_mensuel"]
-                res["debug_art34_deg1"] = art34_adv["debug_deg1"]
-                res["debug_art34_deg2"] = art34_adv["debug_deg2"]
+                if advanced_household:
+                    art34_adv = compute_art34_menage_avance(
+                        dossier=d,
+                        household=household,
+                        taux=taux_art34,
+                        pools=pools,
+                        share_plan=share_plan,
+                        prior_results=prior_results
+                    )
 
-                # Override des montants art34 (mensuel/annuel)
-                res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
-                res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
+                    # calc standard puis override art34
+                    res = compute_officiel_cpas_annuel(answers, engine)
 
-                # Recalcul total / RIS avec override (proprement)
-                # (on recalcule la partie "total_avant_annuel" & RIS, en gardant tout le reste)
-                total_avant = (
-                    float(res["revenus_demandeur_annuels"])
-                    + float(res["capitaux_mobiliers_annuels"])
-                    + float(res["immo_annuels"])
-                    + float(res["cession_biens_annuelle"])
-                    + float(res["cohabitants_part_a_compter_annuel"])
-                    + float(res["prestations_familiales_a_compter_annuel"])
-                    + float(res["avantage_nature_logement_annuel"])
-                )
-                total_avant = r2(total_avant)
+                    res["art34_mode"] = art34_adv["art34_mode"]
+                    res["art34_degree_utilise"] = art34_adv["art34_degree_utilise"]
+                    res["ris_injecte_mensuel"] = art34_adv["ris_injecte_mensuel"]
+                    res["debug_art34_deg1"] = art34_adv["debug_deg1"]
+                    res["debug_art34_deg2"] = art34_adv["debug_deg2"]
 
-                taux_ris_annuel = float(res["taux_ris_annuel"])
-                immu = 0.0
-                if taux_ris_annuel > 0 and total_avant < taux_ris_annuel:
-                    immu = float(cfg["immunisation_simple_annuelle"].get(res["categorie"], 0.0))
-                immu = r2(immu)
+                    res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
+                    res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
 
-                total_apres = r2(max(0.0, total_avant - immu))
-                ris_ann = r2(max(0.0, taux_ris_annuel - total_apres))
-                ris_m = r2(ris_ann / 12.0)
+                    # Recalcul total / RIS avec override (proprement)
+                    total_avant = (
+                        float(res["revenus_demandeur_annuels"])
+                        + float(res["capitaux_mobiliers_annuels"])
+                        + float(res["immo_annuels"])
+                        + float(res["cession_biens_annuelle"])
+                        + float(res["cohabitants_part_a_compter_annuel"])
+                        + float(res["prestations_familiales_a_compter_annuel"])
+                        + float(res["avantage_nature_logement_annuel"])
+                    )
+                    total_avant = r2(total_avant)
 
-                pr = month_prorata_from_request_date(d["date_demande"])
-                ris_1 = r2(ris_m * pr["prorata"])
+                    taux_ris_annuel = float(res["taux_ris_annuel"])
+                    immu = 0.0
+                    if taux_ris_annuel > 0 and total_avant < taux_ris_annuel:
+                        immu = float(cfg["immunisation_simple_annuelle"].get(res["categorie"], 0.0))
+                    immu = r2(immu)
 
-                res["total_ressources_avant_immunisation_simple_annuel"] = float(total_avant)
-                res["immunisation_simple_annuelle"] = float(immu)
-                res["total_ressources_apres_immunisation_simple_annuel"] = float(total_apres)
-                res["ris_theorique_annuel"] = float(ris_ann)
-                res["ris_theorique_mensuel"] = float(ris_m)
-                res["ris_premier_mois_prorata"] = float(ris_1)
-                res["ris_mois_suivants"] = float(ris_m)
-                res["jours_dans_mois"] = pr["jours_dans_mois"]
-                res["jours_restants_inclus"] = pr["jours_restants_inclus"]
-                res["prorata_premier_mois"] = pr["prorata"]
+                    total_apres = r2(max(0.0, total_avant - immu))
+                    ris_ann = r2(max(0.0, taux_ris_annuel - total_apres))
+                    ris_m = r2(ris_ann / 12.0)
 
-            else:
-                # multi simple
-                res = compute_officiel_cpas_annuel(answers, engine)
+                    pr = month_prorata_from_request_date(d["date_demande"])
+                    ris_1 = r2(ris_m * pr["prorata"])
 
-            res["_label"] = d["label"]
-            res["_idx"] = d["idx"]
-            results.append(res)
-            prior_results[d["idx"]] = res
+                    res["total_ressources_avant_immunisation_simple_annuel"] = float(total_avant)
+                    res["immunisation_simple_annuelle"] = float(immu)
+                    res["total_ressources_apres_immunisation_simple_annuel"] = float(total_apres)
+                    res["ris_theorique_annuel"] = float(ris_ann)
+                    res["ris_theorique_mensuel"] = float(ris_m)
+                    res["ris_premier_mois_prorata"] = float(ris_1)
+                    res["ris_mois_suivants"] = float(ris_m)
+                    res["jours_dans_mois"] = pr["jours_dans_mois"]
+                    res["jours_restants_inclus"] = pr["jours_restants_inclus"]
+                    res["prorata_premier_mois"] = pr["prorata"]
+
+                else:
+                    res = compute_officiel_cpas_annuel(answers, engine)
+
+                res["_label"] = d["label"]
+                res["_idx"] = d["idx"]
+                results_tmp[d["idx"]] = res
+
+            # test convergence (RI mensuel stable)
+            changed = False
+            for i in range(len(dossiers)):
+                old = prior_results[i]["ris_theorique_mensuel"] if prior_results[i] else None
+                new = results_tmp[i]["ris_theorique_mensuel"] if results_tmp[i] else None
+                if old is None or new is None or abs(float(old) - float(new)) > 0.005:
+                    changed = True
+
+            prior_results = results_tmp
+            if not changed:
+                break
+
+        results = prior_results
 
         st.success("Calcul terminé ✅")
 
