@@ -10,7 +10,7 @@ import streamlit as st
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
 # ============================================================
 DEFAULT_ENGINE = {
-    "version": "1.1",
+    "version": "1.2",
     "config": {
         # Taux RIS (mensuel)
         "ris_rates": {"cohab": 876.13, "isole": 1314.20, "fam_charge": 1776.07},
@@ -65,6 +65,10 @@ DEFAULT_ENGINE = {
 # ============================================================
 def clamp01(x: float) -> float:
     return max(0.0, min(1.0, float(x)))
+
+
+def r2(x: float) -> float:
+    return float(round(float(x), 2))
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -122,10 +126,6 @@ def month_prorata_from_request_date(d: date) -> dict:
         "jours_restants_inclus": int(days_remaining_inclusive),
         "prorata": float(prorata),
     }
-
-
-def r2(x: float) -> float:
-    return float(round(float(x), 2))
 
 
 # ============================================================
@@ -273,7 +273,7 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
 
 
 # ============================================================
-# ART.34 — ROBUSTE (débitteur à 0€ compté) + normalisation types
+# ART.34 — MODE SIMPLE (comme ton code d'origine amélioré)
 # ============================================================
 def normalize_art34_type(raw_type: str) -> str:
     t = (raw_type or "").strip().lower()
@@ -310,7 +310,7 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         revenu_m = revenu_ann / 12.0
 
         revenus_debiteurs_m += revenu_m
-        nb_debiteurs += 1  # IMPORTANT: même si revenu=0
+        nb_debiteurs += 1  # IMPORTANT: même si revenu = 0
 
     part_m = max(0.0, revenus_debiteurs_m - (nb_debiteurs * taux))
 
@@ -320,7 +320,6 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
     else:
         part_m_par_dem = part_m
 
-    # arrondi feuilles
     part_m = r2(part_m)
     part_m_par_dem = r2(part_m_par_dem)
 
@@ -330,6 +329,111 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         "cohabitants_part_totale_avant_partage_mensuel": part_m,
         "cohabitants_part_a_compter_mensuel": part_m_par_dem,
         "cohabitants_part_a_compter_annuel": r2(part_m_par_dem * 12.0),
+    }
+
+
+# ============================================================
+# ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
+# ============================================================
+def make_pool_key(degree: int, ids: list, include_ris_from: list) -> str:
+    # clé stable
+    a = ",".join(sorted([str(x) for x in ids]))
+    b = ",".join(sorted([str(x) for x in include_ris_from or []]))
+    return f"deg{degree}|ids[{a}]|ris[{b}]"
+
+
+def art34_group_excess_m(debtors: list, taux: float, extra_income_m: float = 0.0) -> float:
+    # Feuilles CPAS: max(0, somme revenus - nb*taux) (nb compte même si 0€)
+    n = len(debtors)
+    s = sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + max(0.0, float(extra_income_m))
+    return r2(max(0.0, s - (n * float(taux))))
+
+
+def art34_draw_from_pool(degree: int,
+                         debtor_ids: list,
+                         household: dict,
+                         taux: float,
+                         pools: dict,
+                         share_plan: dict,
+                         include_ris_m: float,
+                         include_ris_from: list) -> dict:
+    ids = list(debtor_ids or [])
+    debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
+    key = make_pool_key(degree, ids, include_ris_from)
+
+    base = art34_group_excess_m(debtors, taux, extra_income_m=include_ris_m)
+
+    # init pool si absent
+    if key not in pools:
+        pools[key] = float(base)
+
+    # partage ? (cas E6) -> montant fixe par dossier
+    if key in share_plan and share_plan[key]["count"] > 1:
+        per = float(share_plan[key]["per"])
+        take = min(pools[key], per)
+    else:
+        take = pools[key]
+
+    take = r2(max(0.0, take))
+    pools[key] = r2(max(0.0, pools[key] - take))
+
+    return {
+        "key": key,
+        "degree": degree,
+        "nb_debiteurs": len(debtors),
+        "revenus_m_total_avec_injections": r2(sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + include_ris_m),
+        "base_exces_m": float(base),
+        "pris_en_compte_m": float(take),
+        "reste_pool_m": float(pools[key]),
+    }
+
+
+def compute_art34_menage_avance(dossier: dict,
+                               household: dict,
+                               taux: float,
+                               pools: dict,
+                               share_plan: dict,
+                               prior_results: list) -> dict:
+    # somme des RIS mensuels à injecter (optionnel)
+    include_from = dossier.get("include_ris_from_dossiers", []) or []
+    include_ris_m = 0.0
+    for idx in include_from:
+        if 0 <= idx < len(prior_results) and prior_results[idx] is not None:
+            include_ris_m += float(prior_results[idx].get("ris_theorique_mensuel", 0.0))
+    include_ris_m = r2(include_ris_m)
+
+    # priorité 1er degré puis 2e degré
+    deg1_ids = dossier.get("art34_deg1_ids", []) or []
+    deg2_ids = dossier.get("art34_deg2_ids", []) or []
+
+    dbg1 = art34_draw_from_pool(
+        degree=1, debtor_ids=deg1_ids, household=household, taux=taux,
+        pools=pools, share_plan=share_plan, include_ris_m=include_ris_m,
+        include_ris_from=include_from
+    ) if len(deg1_ids) > 0 else None
+
+    part_m = float(dbg1["pris_en_compte_m"]) if dbg1 else 0.0
+    used_degree = 1 if part_m > 0 else 0
+
+    dbg2 = None
+    if part_m <= 0.0 and len(deg2_ids) > 0:
+        dbg2 = art34_draw_from_pool(
+            degree=2, debtor_ids=deg2_ids, household=household, taux=taux,
+            pools=pools, share_plan=share_plan, include_ris_m=0.0,  # en général pas d’injection ici
+            include_ris_from=[]
+        )
+        part_m = float(dbg2["pris_en_compte_m"])
+        used_degree = 2 if part_m > 0 else 0
+
+    part_m = r2(part_m)
+    return {
+        "art34_mode": "MENAGE_AVANCE",
+        "art34_degree_utilise": used_degree,
+        "cohabitants_part_a_compter_mensuel": float(part_m),
+        "cohabitants_part_a_compter_annuel": float(r2(part_m * 12.0)),
+        "debug_deg1": dbg1,
+        "debug_deg2": dbg2,
+        "ris_injecte_mensuel": float(include_ris_m),
     }
 
 
@@ -392,7 +496,7 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict) -> dict:
     )
     ces_ann = r2(ces_ann)
 
-    # 5) Art.34
+    # 5) Art.34 (simple)
     art34 = cohabitants_art34_part_mensuelle_cpas(
         cohabitants=answers.get("cohabitants_art34", []),
         taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
@@ -547,7 +651,7 @@ if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
 st.title("Calcul RIS — Prototype (CPAS officiel : annuel puis /12)")
-st.caption("Mode 'feuilles CPAS' : calcul ANNUEL → immunisation simple → RIS annuel → /12 + prorata 1er mois.")
+st.caption("Mode 'feuilles CPAS' : annuel → immunisation simple → RIS annuel → /12 + prorata 1er mois.")
 
 engine = load_engine()
 cfg = engine["config"]
@@ -591,7 +695,7 @@ with st.sidebar:
 
 
 # ---------------------------
-# Helpers UI
+# Blocs UI
 # ---------------------------
 def ui_revenus_annuels_block(prefix: str) -> list:
     lst = []
@@ -624,8 +728,9 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
     answers = {}
 
     st.divider()
-    st.subheader("Ménage")
+    st.subheader("Ménage (commun)")
 
+    # (Simple) partage art34 entre plusieurs enfants/jeunes (cas E6)
     answers["partage_enfants_jeunes_actif"] = st.checkbox(
         "Partager la part art.34 entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
         value=False,
@@ -635,14 +740,13 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
     if answers["partage_enfants_jeunes_actif"]:
         answers["nb_enfants_jeunes_demandeurs"] = st.number_input(
             "Nombre de demandeurs à partager",
-            min_value=1,
-            value=max(2, nb_demandeurs),
-            step=1,
+            min_value=1, value=max(2, nb_demandeurs), step=1,
             key=f"{prefix}_nb_partage"
         )
 
-    st.markdown("### Cohabitants (art.34)")
-    st.caption("Débiteurs admissibles comptés même à 0€ (comme les feuilles CPAS).")
+    # Cohabitants art34 (simple)
+    st.markdown("### Cohabitants admissibles (art.34) — mode simple")
+    st.caption("Débiteurs admissibles comptés même à 0€ (feuilles CPAS).")
     nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nbcoh")
 
     cohabitants = []
@@ -673,7 +777,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
     answers["pf_links"] = pf_links
 
     st.divider()
-    st.subheader("2) Capitaux mobiliers")
+    st.markdown("### Capitaux mobiliers (ménage)")
     a_cap = st.checkbox("Le ménage possède des capitaux mobiliers", value=False, key=f"{prefix}_cap_yes")
     answers["capital_mobilier_total"] = 0.0
     answers["capital_compte_commun"] = False
@@ -689,7 +793,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
             answers["capital_fraction"] = st.number_input("Part du ménage demandeur (0–1)", min_value=0.0, max_value=1.0, value=1.0, step=0.1, key=f"{prefix}_cap_frac")
 
     st.divider()
-    st.subheader("3) Biens immobiliers")
+    st.markdown("### Biens immobiliers (ménage)")
     biens = []
     a_immo = st.checkbox("Le ménage possède des biens immobiliers", value=False, key=f"{prefix}_immo_yes")
     if a_immo:
@@ -726,7 +830,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
     answers["biens_immobiliers"] = biens
 
     st.divider()
-    st.subheader("4) Cession de biens")
+    st.markdown("### Cession de biens (ménage)")
     cessions = []
     a_ces = st.checkbox("Le ménage a cédé des biens (10 dernières années)", value=False, key=f"{prefix}_ces_yes")
     answers["cessions"] = []
@@ -751,7 +855,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
         answers["cessions"] = cessions
 
     st.divider()
-    st.subheader("6) Avantage en nature")
+    st.markdown("### Avantage en nature")
     answers["avantage_nature_logement_mensuel"] = st.number_input(
         "Logement payé par un tiers non cohabitant (€/mois) — montant à compter",
         min_value=0.0, value=0.0, step=10.0,
@@ -765,92 +869,298 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
 # MODE DOSSIER
 # ------------------------------------------------------------
 st.subheader("Mode dossier")
-multi_mode = st.checkbox("Plusieurs demandes RIS (hors couple) — comparer jusqu’à 3 demandeurs", value=False)
+multi_mode = st.checkbox("Plusieurs demandes RIS — comparer / calculer un ménage", value=False)
 
 # ------------------------------------------------------------
-# MODE MULTI
+# MODE MULTI + MENAGE AVANCE
 # ------------------------------------------------------------
 if multi_mode:
-    st.subheader("A) Demandeurs (jusque 3)")
-    nb_dem = st.number_input("Nombre de demandeurs à comparer", min_value=2, max_value=3, value=2, step=1)
+    st.subheader("Choix du mode multi")
+    advanced_household = st.checkbox(
+        "Ménage avancé (feuilles CPAS) : parents/couple + enfants + autres demandeurs + priorité + pools",
+        value=True
+    )
 
-    demandeurs = []
+    nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
+
+    # -----------------------
+    # A) Encodage des dossiers
+    # -----------------------
+    st.subheader("A) Dossiers / demandes")
+    dossiers = []
     for i in range(int(nb_dem)):
-        st.markdown(f"### Demandeur {i+1}")
-        label = st.text_input("Nom/Label", value=f"Demandeur {i+1}", key=f"md_lab_{i}")
-        cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"md_cat_{i}")
-        enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"md_enf_{i}")
-        d_dem = st.date_input("Date de demande", value=date.today(), key=f"md_date_{i}")
+        st.markdown(f"### Dossier {i+1}")
+        label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
+        cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
+        enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"hd_enf_{i}")
+        d_dem = st.date_input("Date de demande", value=date.today(), key=f"hd_date_{i}")
 
-        st.markdown("**Revenus nets ANNUELS (demandeur)**")
-        revs = ui_revenus_annuels_block(f"md_rev_{i}")
+        is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
 
-        st.markdown("**PF à compter (spécifiques à CE demandeur)**")
-        pf_m = st.number_input(
-            "PF à compter (€/mois)",
-            min_value=0.0, value=0.0, step=10.0,
-            key=f"md_pf_{i}"
+        st.markdown("**Revenus nets ANNUELS (demandeur 1)**")
+        rev1 = ui_revenus_annuels_block(f"hd_rev1_{i}")
+
+        rev2 = []
+        if is_couple:
+            st.markdown("**Revenus nets ANNUELS (demandeur 2 / conjoint)**")
+            rev2 = ui_revenus_annuels_block(f"hd_rev2_{i}")
+
+        st.markdown("**PF à compter (spécifiques à CE dossier)**")
+        pf_m = st.number_input("PF à compter (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"hd_pf_{i}")
+
+        share_art34 = st.checkbox(
+            "Enfant/Jeune demandeur : partager la part art.34 (si même groupe débiteurs) avec les autres dossiers marqués",
+            value=False,
+            key=f"hd_share_{i}"
         )
 
-        demandeurs.append({
+        dossiers.append({
+            "idx": i,
             "label": label,
             "categorie": cat,
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
-            "revenus_demandeur_annuels": revs,
+            "couple_demandeur": bool(is_couple),
+            "revenus_demandeur_annuels": rev1,
+            "revenus_conjoint_annuels": rev2,
             "prestations_familiales_a_compter_mensuel": float(pf_m),
+            "share_art34": bool(share_art34),
+            "art34_deg1_ids": [],
+            "art34_deg2_ids": [],
+            "include_ris_from_dossiers": [],
         })
 
-    menage = ui_menage_common("md_menage", nb_demandeurs=int(nb_dem), enable_pf_links=True)
+    # -----------------------
+    # B) Ménage commun (capitaux/immo/cession/avantage + PF links)
+    # -----------------------
+    st.subheader("B) Ménage (commun)")
+    menage_common = ui_menage_common("hd_menage", nb_demandeurs=int(nb_dem), enable_pf_links=True)
+
+    # Inject PF-links vers le bon dossier
+    for link in menage_common.get("pf_links", []):
+        idx = int(link["dem_index"])
+        if 0 <= idx < len(dossiers):
+            dossiers[idx]["prestations_familiales_a_compter_mensuel"] += float(link["pf_mensuel"])
+
+    # -----------------------
+    # C) Ménage avancé: membres + mapping des débiteurs par degré
+    # -----------------------
+    household = {"members": [], "members_by_id": {}}
+
+    if advanced_household:
+        st.divider()
+        st.subheader("C) Ménage avancé — Membres & débiteurs (art.34)")
+        st.caption("Encode ici les débiteurs potentiels (parents, grands-parents, etc.). Puis, pour chaque dossier, sélectionne le 1er et le 2e degré.")
+
+        nb_m = st.number_input("Nombre de membres (débit. potentiels) à encoder", min_value=0, value=3, step=1)
+        members = []
+        for j in range(int(nb_m)):
+            st.markdown(f"**Membre {j+1}**")
+            c1, c2, c3 = st.columns([2, 1, 1])
+            mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
+            name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
+            rev_a = c2.number_input("Revenus nets annuels (€/an) à prendre en compte", min_value=0.0, value=0.0, step=100.0, key=f"mem_rev_{j}")
+            excl = c3.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
+            m = {
+                "id": str(mid).strip(),
+                "name": str(name).strip(),
+                "revenu_net_annuel": float(rev_a),
+                "exclure": bool(excl)
+            }
+            if m["id"]:
+                members.append(m)
+
+        # indexation
+        members_by_id = {m["id"]: m for m in members if not m.get("exclure", False)}
+        household = {"members": members, "members_by_id": members_by_id}
+
+        ids_available = list(members_by_id.keys())
+
+        st.divider()
+        st.subheader("D) Paramétrage art.34 par dossier (degrés + injections)")
+        for d in dossiers:
+            st.markdown(f"### {d['label']} — art.34")
+            c1, c2 = st.columns(2)
+            d["art34_deg1_ids"] = c1.multiselect(
+                "Débiteurs 1er degré (prioritaires)",
+                options=ids_available,
+                default=[],
+                key=f"d_{d['idx']}_deg1"
+            )
+            d["art34_deg2_ids"] = c2.multiselect(
+                "Débiteurs 2e degré (si 1er degré = 0 disponible)",
+                options=ids_available,
+                default=[],
+                key=f"d_{d['idx']}_deg2"
+            )
+
+            d["include_ris_from_dossiers"] = st.multiselect(
+                "Option : ajouter le RI mensuel d’autres dossiers dans les revenus des débiteurs 1er degré (cas E11 : +RI parents)",
+                options=[i for i in range(len(dossiers))],
+                format_func=lambda k: f"{k+1} — {dossiers[k]['label']}",
+                default=[],
+                key=f"d_{d['idx']}_risinj"
+            )
 
     st.divider()
-    if st.button("Calculer (comparatif)"):
-        # Injecte PF “liées cohabitant” vers le bon demandeur (cas E6)
-        for link in menage.get("pf_links", []):
-            idx = int(link["dem_index"])
-            if 0 <= idx < len(demandeurs):
-                demandeurs[idx]["prestations_familiales_a_compter_mensuel"] += float(link["pf_mensuel"])
+    if st.button("Calculer (multi)"):
+        taux_art34 = float(cfg["art34"]["taux_a_laisser_mensuel"])
+
+        # pools art34 (pour éviter le double comptage) + plan de partage (cas E6)
+        pools = {}
+        share_plan = {}
+
+        if advanced_household:
+            # Pré-calcul partage: pour chaque groupe deg1 identique + mêmes injections, si plusieurs dossiers "share_art34"
+            for d in dossiers:
+                if not d.get("share_art34", False):
+                    continue
+                ids = list(d.get("art34_deg1_ids", []) or [])
+                if not ids:
+                    continue
+                key = make_pool_key(1, ids, d.get("include_ris_from_dossiers", []))
+                if key not in share_plan:
+                    share_plan[key] = {"count": 0, "per": 0.0}
+                share_plan[key]["count"] += 1
+
+            # fixer "per" = base_exces / count (calculé sur la base du ménage, sans dépendre de l’ordre)
+            for key, v in list(share_plan.items()):
+                # recomposer ids depuis la clé (simple parsing)
+                try:
+                    seg = key.split("|")[1]  # ids[...]
+                    ids_str = seg.replace("ids[", "").replace("]", "")
+                    ids = [x for x in ids_str.split(",") if x]
+                except Exception:
+                    ids = []
+                debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
+                base = art34_group_excess_m(debtors, taux_art34, extra_income_m=0.0)
+                if v["count"] > 0:
+                    v["per"] = r2(float(base) / float(v["count"]))
 
         results = []
-        for d in demandeurs:
-            answers = dict(menage)
+        prior_results = [None] * len(dossiers)
+
+        for d in dossiers:
+            answers = dict(menage_common)
             answers.update({
                 "categorie": d["categorie"],
                 "enfants_a_charge": d["enfants_a_charge"],
                 "date_demande": d["date_demande"],
-                "couple_demandeur": False,
+                "couple_demandeur": d["couple_demandeur"],
                 "revenus_demandeur_annuels": d["revenus_demandeur_annuels"],
-                "revenus_conjoint_annuels": [],
+                "revenus_conjoint_annuels": d["revenus_conjoint_annuels"],
                 "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
             })
 
-            res = compute_officiel_cpas_annuel(answers, engine)
+            if advanced_household:
+                # calc art34 avancé, puis injecte dans answers en “cohabitants_part…”
+                art34_adv = compute_art34_menage_avance(
+                    dossier=d,
+                    household=household,
+                    taux=taux_art34,
+                    pools=pools,
+                    share_plan=share_plan,
+                    prior_results=prior_results
+                )
+
+                # on fabrique un res "classique" en contournant le simple art34:
+                # -> on calcule d'abord comme d'habitude, puis on remplace les champs art34
+                res = compute_officiel_cpas_annuel(answers, engine)
+                res["art34_mode"] = art34_adv["art34_mode"]
+                res["art34_degree_utilise"] = art34_adv["art34_degree_utilise"]
+                res["ris_injecte_mensuel"] = art34_adv["ris_injecte_mensuel"]
+                res["debug_art34_deg1"] = art34_adv["debug_deg1"]
+                res["debug_art34_deg2"] = art34_adv["debug_deg2"]
+
+                # Override des montants art34 (mensuel/annuel)
+                res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
+                res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
+
+                # Recalcul total / RIS avec override (proprement)
+                # (on recalcule la partie "total_avant_annuel" & RIS, en gardant tout le reste)
+                total_avant = (
+                    float(res["revenus_demandeur_annuels"])
+                    + float(res["capitaux_mobiliers_annuels"])
+                    + float(res["immo_annuels"])
+                    + float(res["cession_biens_annuelle"])
+                    + float(res["cohabitants_part_a_compter_annuel"])
+                    + float(res["prestations_familiales_a_compter_annuel"])
+                    + float(res["avantage_nature_logement_annuel"])
+                )
+                total_avant = r2(total_avant)
+
+                taux_ris_annuel = float(res["taux_ris_annuel"])
+                immu = 0.0
+                if taux_ris_annuel > 0 and total_avant < taux_ris_annuel:
+                    immu = float(cfg["immunisation_simple_annuelle"].get(res["categorie"], 0.0))
+                immu = r2(immu)
+
+                total_apres = r2(max(0.0, total_avant - immu))
+                ris_ann = r2(max(0.0, taux_ris_annuel - total_apres))
+                ris_m = r2(ris_ann / 12.0)
+
+                pr = month_prorata_from_request_date(d["date_demande"])
+                ris_1 = r2(ris_m * pr["prorata"])
+
+                res["total_ressources_avant_immunisation_simple_annuel"] = float(total_avant)
+                res["immunisation_simple_annuelle"] = float(immu)
+                res["total_ressources_apres_immunisation_simple_annuel"] = float(total_apres)
+                res["ris_theorique_annuel"] = float(ris_ann)
+                res["ris_theorique_mensuel"] = float(ris_m)
+                res["ris_premier_mois_prorata"] = float(ris_1)
+                res["ris_mois_suivants"] = float(ris_m)
+                res["jours_dans_mois"] = pr["jours_dans_mois"]
+                res["jours_restants_inclus"] = pr["jours_restants_inclus"]
+                res["prorata_premier_mois"] = pr["prorata"]
+
+            else:
+                # multi simple
+                res = compute_officiel_cpas_annuel(answers, engine)
+
             res["_label"] = d["label"]
+            res["_idx"] = d["idx"]
             results.append(res)
+            prior_results[d["idx"]] = res
 
         st.success("Calcul terminé ✅")
 
         st.markdown("## Tableau comparatif")
         table_rows = []
         for r in results:
-            table_rows.append({
-                "Demandeur": r["_label"],
+            row = {
+                "Dossier": r["_label"],
                 "Catégorie": r["categorie"],
+                "Couple ?": "Oui" if r.get("couple_demandeur") else "Non",
                 "RIS mensuel": round(r["ris_theorique_mensuel"], 2),
-                "RIS 1er mois (prorata)": round(r["ris_premier_mois_prorata"], 2),
+                "RIS 1er mois": round(r["ris_premier_mois_prorata"], 2),
                 "Art.34 mensuel compté": round(r["cohabitants_part_a_compter_mensuel"], 2),
                 "PF mensuel compté": round(r["prestations_familiales_a_compter_mensuel"], 2),
-                "Débiteurs comptés": r["cohabitants_n_pris_en_compte"],
                 "Total ressources (annuel)": round(r["total_ressources_avant_immunisation_simple_annuel"], 2),
-            })
+            }
+            if advanced_household:
+                row["Art.34 mode"] = r.get("art34_mode", "")
+                row["Degré utilisé"] = r.get("art34_degree_utilise", 0)
+                row["RI injecté (€/mois)"] = round(r.get("ris_injecte_mensuel", 0.0), 2)
+            table_rows.append(row)
+
         st.dataframe(table_rows, use_container_width=True)
 
         st.divider()
-        st.markdown("## Détails (par demandeur)")
+        st.markdown("## Détails (par dossier)")
         for r in results:
             with st.expander(f"Détail — {r['_label']}"):
                 st.metric("RIS mensuel", f"{r['ris_theorique_mensuel']:.2f} €")
                 st.metric("RIS 1er mois (prorata)", f"{r['ris_premier_mois_prorata']:.2f} €")
+                if advanced_household:
+                    st.caption("Art.34 avancé :")
+                    st.write({
+                        "mode": r.get("art34_mode"),
+                        "degre": r.get("art34_degree_utilise"),
+                        "ri_injecte_m": r.get("ris_injecte_mensuel", 0.0),
+                        "deg1": r.get("debug_art34_deg1"),
+                        "deg2": r.get("debug_art34_deg2"),
+                    })
+
                 st.json(r)
 
                 decision_txt = build_decision_text(r["_label"], r)
@@ -861,7 +1171,6 @@ if multi_mode:
                     mime="text/plain",
                     key=f"dl_txt_{r['_label']}"
                 )
-
                 pdf_buf = try_make_pdf_from_text(decision_txt)
                 if pdf_buf is not None:
                     st.download_button(
@@ -874,8 +1183,9 @@ if multi_mode:
                 else:
                     st.info("PDF indisponible ici (reportlab non installé). Ajoute `reportlab` dans requirements.txt.")
 
+
 # ------------------------------------------------------------
-# MODE 1 DEMANDEUR (ton flux d’origine, conservé)
+# MODE 1 DEMANDEUR (ton flux d’origine)
 # ------------------------------------------------------------
 else:
     answers = {}
@@ -908,7 +1218,6 @@ else:
         min_value=0.0, value=0.0, step=10.0
     )
 
-    # Ménage (1 demandeur : pas besoin de PF-links multi)
     menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False)
     answers.update(menage)
 
