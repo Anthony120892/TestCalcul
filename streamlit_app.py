@@ -1,4 +1,4 @@
-import json
+ import json
 import os
 import calendar
 from datetime import date
@@ -10,7 +10,7 @@ import streamlit as st
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
 # ============================================================
 DEFAULT_ENGINE = {
-    "version": "1.2",
+    "version": "1.3",
     "config": {
         # Taux RIS (mensuel)
         "ris_rates": {"cohab": 876.13, "isole": 1314.20, "fam_charge": 1776.07},
@@ -23,6 +23,9 @@ DEFAULT_ENGINE = {
 
         # Art. 34 : taux "catégorie 1 à laisser" (mensuel)
         "art34": {"taux_a_laisser_mensuel": 876.13},
+
+        # Prestations familiales (montant de référence indexable)
+        "pf": {"pf_mensuel_defaut": 0.0},
 
         # Capitaux mobiliers (annuels)
         "capital_mobilier": {
@@ -106,6 +109,12 @@ def normalize_engine(raw: dict) -> dict:
     cfg["art34"]["taux_a_laisser_mensuel"] = float(
         cfg["art34"].get("taux_a_laisser_mensuel", cfg["ris_rates"]["cohab"])
     )
+
+    # PF indexables (valeur de référence)
+    if "pf" not in cfg:
+        cfg["pf"] = {"pf_mensuel_defaut": 0.0}
+    cfg["pf"]["pf_mensuel_defaut"] = float(cfg["pf"].get("pf_mensuel_defaut", 0.0))
+
     return engine
 
 
@@ -250,6 +259,7 @@ def cession_biens_annuelle(cessions: list,
 
 # ============================================================
 # REVENUS (exo socio-pro) -> encode ANNUEL, applique mensuel, remonte ANNUEL
+# + ajout type "prestations_familiales"
 # ============================================================
 def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> float:
     total_m = 0.0
@@ -267,6 +277,9 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
             total_m += max(0.0, m - min(ded_m, m))
         elif t == "ale":
             total_m += max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0)))
+        elif t == "prestations_familiales":
+            # PF encodées comme revenu annuel (comptées "standard")
+            total_m += m
         else:
             total_m += m
     return float(max(0.0, total_m * 12.0))
@@ -336,15 +349,11 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
 # ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
 # ============================================================
 def make_pool_key(ids: list) -> str:
-    # Pool UNIQUE par groupe de débiteurs (feuilles CPAS) :
-    # - ne dépend PAS du degré
-    # - ne dépend PAS de l'injection RI
     a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
     return f"ids[{a}]"
 
 
 def art34_group_excess_m(debtors: list, taux: float, extra_income_m: float = 0.0) -> float:
-    # Feuilles CPAS: max(0, somme revenus - nb*taux) (nb compte même si 0€)
     n = len(debtors)
     s = sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + max(0.0, float(extra_income_m))
     return r2(max(0.0, s - (n * float(taux))))
@@ -361,16 +370,12 @@ def art34_draw_from_pool(degree: int,
     ids = list(debtor_ids or [])
     debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
 
-    # Pool unique (ne dépend PAS du degré ni de l'injection)
     key = make_pool_key(ids)
-
     base = art34_group_excess_m(debtors, taux, extra_income_m=include_ris_m)
 
-    # init pool si absent
     if key not in pools:
         pools[key] = float(base)
 
-    # partage ? (cas E6) -> montant fixe par dossier
     if key in share_plan and share_plan[key]["count"] > 1:
         per = float(share_plan[key]["per"])
         take = min(pools[key], per)
@@ -384,7 +389,9 @@ def art34_draw_from_pool(degree: int,
         "key": key,
         "degree": degree,
         "nb_debiteurs": len(debtors),
-        "revenus_m_total_avec_injections": r2(sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + include_ris_m),
+        "revenus_m_total_avec_injections": r2(
+            sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + include_ris_m
+        ),
         "base_exces_m": float(base),
         "pris_en_compte_m": float(take),
         "reste_pool_m": float(pools[key]),
@@ -397,7 +404,6 @@ def compute_art34_menage_avance(dossier: dict,
                                pools: dict,
                                share_plan: dict,
                                prior_results: list) -> dict:
-    # somme des RIS mensuels à injecter (optionnel)
     include_from = dossier.get("include_ris_from_dossiers", []) or []
     include_ris_m = 0.0
     for idx in include_from:
@@ -405,7 +411,6 @@ def compute_art34_menage_avance(dossier: dict,
             include_ris_m += float(prior_results[idx].get("ris_theorique_mensuel", 0.0))
     include_ris_m = r2(include_ris_m)
 
-    # priorité 1er degré puis 2e degré
     deg1_ids = dossier.get("art34_deg1_ids", []) or []
     deg2_ids = dossier.get("art34_deg2_ids", []) or []
 
@@ -422,7 +427,7 @@ def compute_art34_menage_avance(dossier: dict,
     if part_m <= 0.0 and len(deg2_ids) > 0:
         dbg2 = art34_draw_from_pool(
             degree=2, debtor_ids=deg2_ids, household=household, taux=taux,
-            pools=pools, share_plan=share_plan, include_ris_m=0.0,  # en général pas d’injection ici
+            pools=pools, share_plan=share_plan, include_ris_m=0.0,
             include_ris_from=[]
         )
         part_m = float(dbg2["pris_en_compte_m"])
@@ -686,6 +691,15 @@ with st.sidebar:
     )
 
     st.divider()
+    st.write("**Prestations familiales (indexables)**")
+    cfg["pf"]["pf_mensuel_defaut"] = st.number_input(
+        "PF (€/mois) — valeur de référence",
+        min_value=0.0,
+        value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+        format="%.2f"
+    )
+
+    st.divider()
     st.write("**Immunisation simple (€/an)**")
     cfg["immunisation_simple_annuelle"]["cohab"] = st.number_input("Immu cohab (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["cohab"]), format="%.2f")
     cfg["immunisation_simple_annuelle"]["isole"] = st.number_input("Immu isolé (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["isole"]), format="%.2f")
@@ -708,7 +722,11 @@ def ui_revenus_annuels_block(prefix: str) -> list:
         c1, c2, c3 = st.columns([2, 1, 1])
         label = c1.text_input("Type/label", value="salaire/chômage", key=f"{prefix}_lab_{i}")
         montant_a = c2.number_input("Montant net ANNUEL (€/an)", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_a_{i}")
-        typ = c3.selectbox("Règle", ["standard", "socio_prof", "etudiant", "artistique_irregulier", "ale"], key=f"{prefix}_t_{i}")
+        typ = c3.selectbox(
+            "Règle",
+            ["standard", "socio_prof", "etudiant", "artistique_irregulier", "ale", "prestations_familiales"],
+            key=f"{prefix}_t_{i}"
+        )
 
         eligible = True
         ale_part_exc_m = 0.0
@@ -733,7 +751,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
     st.divider()
     st.subheader("Ménage (commun)")
 
-    # (Simple) partage art34 entre plusieurs enfants/jeunes (cas E6)
     answers["partage_enfants_jeunes_actif"] = st.checkbox(
         "Partager la part art.34 entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
         value=False,
@@ -747,7 +764,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
             key=f"{prefix}_nb_partage"
         )
 
-    # Cohabitants art34 (simple)
     st.markdown("### Cohabitants admissibles (art.34) — mode simple")
     st.caption("Débiteurs admissibles comptés même à 0€ (feuilles CPAS).")
     nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nbcoh")
@@ -909,7 +925,14 @@ if multi_mode:
             rev2 = ui_revenus_annuels_block(f"hd_rev2_{i}")
 
         st.markdown("**PF à compter (spécifiques à CE dossier)**")
-        pf_m = st.number_input("PF à compter (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"hd_pf_{i}")
+        st.caption("Astuce : si tu encodes les PF comme revenu annuel (type 'prestations_familiales'), laisse ce champ à 0 pour éviter un double comptage.")
+        pf_m = st.number_input(
+            "PF à compter (€/mois)",
+            min_value=0.0,
+            value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+            step=10.0,
+            key=f"hd_pf_{i}"
+        )
 
         share_art34 = st.checkbox(
             "Enfant/Jeune demandeur : partager la part art.34 (si même groupe débiteurs) avec les autres dossiers marqués",
@@ -973,7 +996,6 @@ if multi_mode:
             if m["id"]:
                 members.append(m)
 
-        # indexation
         members_by_id = {m["id"]: m for m in members if not m.get("exclure", False)}
         household = {"members": members, "members_by_id": members_by_id}
 
@@ -1013,7 +1035,6 @@ if multi_mode:
         share_plan = {}
 
         if advanced_household:
-            # Pré-calcul partage: pour chaque groupe deg1 identique, si plusieurs dossiers "share_art34"
             for d in dossiers:
                 if not d.get("share_art34", False):
                     continue
@@ -1025,7 +1046,6 @@ if multi_mode:
                     share_plan[key] = {"count": 0, "per": 0.0}
                 share_plan[key]["count"] += 1
 
-            # fixer "per" = base_exces / count (calculé sur la base du ménage, sans dépendre de l’ordre)
             for key, v in list(share_plan.items()):
                 try:
                     ids_str = key.replace("ids[", "").replace("]", "")
@@ -1037,11 +1057,10 @@ if multi_mode:
                 if v["count"] > 0:
                     v["per"] = r2(float(base) / float(v["count"]))
 
-        # --- boucle de stabilisation : évite dépendance à l'ordre (injection RI) ---
         prior_results = [None] * len(dossiers)
 
-        for _iter in range(4):  # 3-4 passes suffisent en pratique
-            pools = {}  # IMPORTANT: reset pool à chaque passe (recalcul propre)
+        for _iter in range(4):
+            pools = {}
             results_tmp = [None] * len(dossiers)
 
             for d in dossiers:
@@ -1066,7 +1085,6 @@ if multi_mode:
                         prior_results=prior_results
                     )
 
-                    # calc standard puis override art34
                     res = compute_officiel_cpas_annuel(answers, engine)
 
                     res["art34_mode"] = art34_adv["art34_mode"]
@@ -1078,7 +1096,6 @@ if multi_mode:
                     res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
                     res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
 
-                    # Recalcul total / RIS avec override (proprement)
                     total_avant = (
                         float(res["revenus_demandeur_annuels"])
                         + float(res["capitaux_mobiliers_annuels"])
@@ -1121,7 +1138,6 @@ if multi_mode:
                 res["_idx"] = d["idx"]
                 results_tmp[d["idx"]] = res
 
-            # test convergence (RI mensuel stable)
             changed = False
             for i in range(len(dossiers)):
                 old = prior_results[i]["ris_theorique_mensuel"] if prior_results[i] else None
@@ -1226,9 +1242,12 @@ else:
 
     st.divider()
     st.subheader("PF à compter (spécifiques au demandeur)")
+    st.caption("Astuce : si tu encodes les PF comme revenu annuel (type 'prestations_familiales'), laisse ce champ à 0 pour éviter un double comptage.")
     answers["prestations_familiales_a_compter_mensuel"] = st.number_input(
         "Prestations familiales à compter (€/mois)",
-        min_value=0.0, value=0.0, step=10.0
+        min_value=0.0,
+        value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+        step=10.0
     )
 
     menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False)
