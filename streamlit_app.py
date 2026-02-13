@@ -1,4 +1,4 @@
-import json
+        import json
 import os
 import calendar
 from datetime import date
@@ -10,7 +10,7 @@ import streamlit as st
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
 # ============================================================
 DEFAULT_ENGINE = {
-    "version": "1.3",
+    "version": "1.4",
     "config": {
         # Taux RIS (mensuel)
         "ris_rates": {"cohab": 876.13, "isole": 1314.20, "fam_charge": 1776.07},
@@ -24,8 +24,11 @@ DEFAULT_ENGINE = {
         # Art. 34 : taux "catégorie 1 à laisser" (mensuel)
         "art34": {"taux_a_laisser_mensuel": 876.13},
 
-        # Prestations familiales (montant de référence indexable)
-        "pf": {"pf_mensuel_defaut": 0.0},
+        # Prestations familiales (indexables + mode par défaut)
+        "pf": {
+            "pf_mensuel_defaut": 0.0,
+            "mode_defaut": "mensuel"  # "mensuel" ou "revenus"
+        },
 
         # Capitaux mobiliers (annuels)
         "capital_mobilier": {
@@ -110,10 +113,13 @@ def normalize_engine(raw: dict) -> dict:
         cfg["art34"].get("taux_a_laisser_mensuel", cfg["ris_rates"]["cohab"])
     )
 
-    # PF indexables (valeur de référence)
+    # PF indexables (valeur de référence + mode)
     if "pf" not in cfg:
-        cfg["pf"] = {"pf_mensuel_defaut": 0.0}
+        cfg["pf"] = {"pf_mensuel_defaut": 0.0, "mode_defaut": "mensuel"}
     cfg["pf"]["pf_mensuel_defaut"] = float(cfg["pf"].get("pf_mensuel_defaut", 0.0))
+    cfg["pf"]["mode_defaut"] = str(cfg["pf"].get("mode_defaut", "mensuel"))
+    if cfg["pf"]["mode_defaut"] not in ("mensuel", "revenus"):
+        cfg["pf"]["mode_defaut"] = "mensuel"
 
     return engine
 
@@ -135,6 +141,25 @@ def month_prorata_from_request_date(d: date) -> dict:
         "jours_restants_inclus": int(days_remaining_inclusive),
         "prorata": float(prorata),
     }
+
+
+def pf_filter_revenus_if_needed(revenus: list, pf_mode: str) -> list:
+    """
+    Si PF via champ mensuel: on supprime les revenus 'prestations_familiales'
+    pour éviter le double comptage.
+    """
+    mode = (pf_mode or "").strip().lower()
+    if mode == "mensuel":
+        return [r for r in (revenus or []) if (r.get("type") != "prestations_familiales")]
+    return list(revenus or [])
+
+
+def pf_force_mensuel_if_needed(pf_m: float, pf_mode: str) -> float:
+    """Si PF via revenus annuels: on force le champ PF mensuel à 0."""
+    mode = (pf_mode or "").strip().lower()
+    if mode == "revenus":
+        return 0.0
+    return float(max(0.0, pf_m))
 
 
 # ============================================================
@@ -278,7 +303,6 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
         elif t == "ale":
             total_m += max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0)))
         elif t == "prestations_familiales":
-            # PF encodées comme revenu annuel (comptées "standard")
             total_m += m
         else:
             total_m += m
@@ -286,7 +310,7 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
 
 
 # ============================================================
-# ART.34 — MODE SIMPLE (comme ton code d'origine amélioré)
+# ART.34 — MODE SIMPLE
 # ============================================================
 def normalize_art34_type(raw_type: str) -> str:
     t = (raw_type or "").strip().lower()
@@ -346,7 +370,7 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
 
 
 # ============================================================
-# ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
+# ART.34 — MENAGE AVANCE
 # ============================================================
 def make_pool_key(ids: list) -> str:
     a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
@@ -698,6 +722,11 @@ with st.sidebar:
         value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
         format="%.2f"
     )
+    cfg["pf"]["mode_defaut"] = st.selectbox(
+        "Mode PF par défaut",
+        ["mensuel", "revenus"],
+        index=0 if cfg["pf"].get("mode_defaut", "mensuel") == "mensuel" else 1
+    )
 
     st.divider()
     st.write("**Immunisation simple (€/an)**")
@@ -924,15 +953,29 @@ if multi_mode:
             st.markdown("**Revenus nets ANNUELS (demandeur 2 / conjoint)**")
             rev2 = ui_revenus_annuels_block(f"hd_rev2_{i}")
 
-        st.markdown("**PF à compter (spécifiques à CE dossier)**")
-        st.caption("Astuce : si tu encodes les PF comme revenu annuel (type 'prestations_familiales'), laisse ce champ à 0 pour éviter un double comptage.")
-        pf_m = st.number_input(
-            "PF à compter (€/mois)",
-            min_value=0.0,
-            value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
-            step=10.0,
-            key=f"hd_pf_{i}"
+        st.divider()
+        st.subheader("Prestations familiales (PF) — anti double comptage")
+        pf_mode = st.radio(
+            "Méthode PF",
+            ["mensuel", "revenus"],
+            index=0 if cfg["pf"].get("mode_defaut", "mensuel") == "mensuel" else 1,
+            horizontal=True,
+            key=f"hd_pf_mode_{i}"
         )
+
+        st.markdown("**PF à compter (spécifiques à CE dossier)**")
+        if pf_mode == "mensuel":
+            pf_m = st.number_input(
+                "PF à compter (€/mois)",
+                min_value=0.0,
+                value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+                step=10.0,
+                key=f"hd_pf_{i}"
+            )
+            st.caption("Mode mensuel: toute ligne de revenus 'prestations_familiales' sera ignorée automatiquement.")
+        else:
+            st.info("Mode revenus: encode les PF dans les revenus annuels (type 'prestations_familiales'). Le champ PF mensuel est forcé à 0.")
+            pf_m = 0.0
 
         share_art34 = st.checkbox(
             "Enfant/Jeune demandeur : partager la part art.34 (si même groupe débiteurs) avec les autres dossiers marqués",
@@ -949,6 +992,7 @@ if multi_mode:
             "couple_demandeur": bool(is_couple),
             "revenus_demandeur_annuels": rev1,
             "revenus_conjoint_annuels": rev2,
+            "pf_mode": pf_mode,
             "prestations_familiales_a_compter_mensuel": float(pf_m),
             "share_art34": bool(share_art34),
             "art34_deg1_ids": [],
@@ -962,7 +1006,7 @@ if multi_mode:
     st.subheader("B) Ménage (commun)")
     menage_common = ui_menage_common("hd_menage", nb_demandeurs=int(nb_dem), enable_pf_links=True)
 
-    # Inject PF-links vers le bon dossier
+    # Inject PF-links vers le bon dossier (sera neutralisé si pf_mode == "revenus")
     for link in menage_common.get("pf_links", []):
         idx = int(link["dem_index"])
         if 0 <= idx < len(dossiers):
@@ -1057,6 +1101,7 @@ if multi_mode:
                 if v["count"] > 0:
                     v["per"] = r2(float(base) / float(v["count"]))
 
+        # boucle de stabilisation (injection RI)
         prior_results = [None] * len(dossiers)
 
         for _iter in range(4):
@@ -1065,14 +1110,20 @@ if multi_mode:
 
             for d in dossiers:
                 answers = dict(menage_common)
+
+                pf_mode = d.get("pf_mode", "mensuel")
+                rev_dem = pf_filter_revenus_if_needed(d["revenus_demandeur_annuels"], pf_mode)
+                rev_conj = pf_filter_revenus_if_needed(d["revenus_conjoint_annuels"], pf_mode)
+                pf_m_locked = pf_force_mensuel_if_needed(d["prestations_familiales_a_compter_mensuel"], pf_mode)
+
                 answers.update({
                     "categorie": d["categorie"],
                     "enfants_a_charge": d["enfants_a_charge"],
                     "date_demande": d["date_demande"],
                     "couple_demandeur": d["couple_demandeur"],
-                    "revenus_demandeur_annuels": d["revenus_demandeur_annuels"],
-                    "revenus_conjoint_annuels": d["revenus_conjoint_annuels"],
-                    "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
+                    "revenus_demandeur_annuels": rev_dem,
+                    "revenus_conjoint_annuels": rev_conj,
+                    "prestations_familiales_a_compter_mensuel": float(pf_m_locked),
                 })
 
                 if advanced_household:
@@ -1096,6 +1147,7 @@ if multi_mode:
                     res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
                     res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
 
+                    # Recalcul total / RIS avec override
                     total_avant = (
                         float(res["revenus_demandeur_annuels"])
                         + float(res["capitaux_mobiliers_annuels"])
@@ -1130,12 +1182,12 @@ if multi_mode:
                     res["jours_dans_mois"] = pr["jours_dans_mois"]
                     res["jours_restants_inclus"] = pr["jours_restants_inclus"]
                     res["prorata_premier_mois"] = pr["prorata"]
-
                 else:
                     res = compute_officiel_cpas_annuel(answers, engine)
 
                 res["_label"] = d["label"]
                 res["_idx"] = d["idx"]
+                res["_pf_mode"] = d.get("pf_mode", "mensuel")
                 results_tmp[d["idx"]] = res
 
             changed = False
@@ -1160,6 +1212,7 @@ if multi_mode:
                 "Dossier": r["_label"],
                 "Catégorie": r["categorie"],
                 "Couple ?": "Oui" if r.get("couple_demandeur") else "Non",
+                "PF mode": r.get("_pf_mode", "mensuel"),
                 "RIS mensuel": round(r["ris_theorique_mensuel"], 2),
                 "RIS 1er mois": round(r["ris_premier_mois_prorata"], 2),
                 "Art.34 mensuel compté": round(r["cohabitants_part_a_compter_mensuel"], 2),
@@ -1180,6 +1233,8 @@ if multi_mode:
             with st.expander(f"Détail — {r['_label']}"):
                 st.metric("RIS mensuel", f"{r['ris_theorique_mensuel']:.2f} €")
                 st.metric("RIS 1er mois (prorata)", f"{r['ris_premier_mois_prorata']:.2f} €")
+                st.write(f"PF mode: **{r.get('_pf_mode','mensuel')}**")
+
                 if advanced_household:
                     st.caption("Art.34 avancé :")
                     st.write({
@@ -1214,7 +1269,7 @@ if multi_mode:
 
 
 # ------------------------------------------------------------
-# MODE 1 DEMANDEUR (ton flux d’origine)
+# MODE 1 DEMANDEUR
 # ------------------------------------------------------------
 else:
     answers = {}
@@ -1231,24 +1286,41 @@ else:
     st.subheader("1) Revenus du demandeur — ANNUELS (nets)")
     answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE (2 demandeurs ensemble)", value=False)
 
+    st.divider()
+    st.subheader("Prestations familiales (PF) — anti double comptage")
+    pf_mode_single = st.radio(
+        "Méthode PF",
+        ["mensuel", "revenus"],
+        index=0 if cfg["pf"].get("mode_defaut", "mensuel") == "mensuel" else 1,
+        horizontal=True
+    )
+
     st.markdown("**Demandeur 1**")
-    answers["revenus_demandeur_annuels"] = ui_revenus_annuels_block("dem")
+    rev_dem_ui = ui_revenus_annuels_block("dem")
+    answers["revenus_demandeur_annuels"] = pf_filter_revenus_if_needed(rev_dem_ui, pf_mode_single)
 
     answers["revenus_conjoint_annuels"] = []
     if answers["couple_demandeur"]:
         st.divider()
         st.markdown("**Demandeur 2 (conjoint/partenaire) — revenus à additionner**")
-        answers["revenus_conjoint_annuels"] = ui_revenus_annuels_block("conj")
+        rev_conj_ui = ui_revenus_annuels_block("conj")
+        answers["revenus_conjoint_annuels"] = pf_filter_revenus_if_needed(rev_conj_ui, pf_mode_single)
 
     st.divider()
     st.subheader("PF à compter (spécifiques au demandeur)")
-    st.caption("Astuce : si tu encodes les PF comme revenu annuel (type 'prestations_familiales'), laisse ce champ à 0 pour éviter un double comptage.")
-    answers["prestations_familiales_a_compter_mensuel"] = st.number_input(
-        "Prestations familiales à compter (€/mois)",
-        min_value=0.0,
-        value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
-        step=10.0
-    )
+    if pf_mode_single == "mensuel":
+        pf_m = st.number_input(
+            "Prestations familiales à compter (€/mois)",
+            min_value=0.0,
+            value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+            step=10.0
+        )
+        st.caption("Mode mensuel: toute ligne de revenus 'prestations_familiales' sera ignorée automatiquement.")
+    else:
+        st.info("Mode revenus: encode les PF dans les revenus annuels (type 'prestations_familiales'). Le champ PF mensuel est forcé à 0.")
+        pf_m = 0.0
+
+    answers["prestations_familiales_a_compter_mensuel"] = float(pf_force_mensuel_if_needed(pf_m, pf_mode_single))
 
     menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False)
     answers.update(menage)
