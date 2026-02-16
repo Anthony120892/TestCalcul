@@ -62,7 +62,6 @@ DEFAULT_ENGINE = {
     }
 }
 
-
 # ============================================================
 # UTILITAIRES
 # ============================================================
@@ -72,6 +71,15 @@ def clamp01(x: float) -> float:
 
 def r2(x: float) -> float:
     return float(round(float(x), 2))
+
+
+def annualize(amount: float, period: str) -> float:
+    """Convertit un montant encodé en mensuel/annuel vers un ANNUEL (base de calcul)."""
+    a = max(0.0, float(amount))
+    p = (period or "annuel").strip().lower()
+    if p.startswith("mens"):
+        return a * 12.0
+    return a
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -136,7 +144,6 @@ def month_prorata_from_request_date(d: date) -> dict:
         "prorata": float(prorata),
     }
 
-
 # ============================================================
 # CAPITAUX MOBILIERS (annuel -> renvoie ANNUEL)
 # ============================================================
@@ -173,7 +180,6 @@ def capital_mobilier_annuel(total_capital: float,
     tranche2 = max(0.0, adj_total - t1_max)
     annuel += tranche2 * r2_
     return float(max(0.0, annuel))
-
 
 # ============================================================
 # IMMOBILIER (annuel)
@@ -213,7 +219,6 @@ def immo_annuel_total(biens: list, enfants: int, cfg_immo: dict) -> float:
         total_annuel += max(0.0, base)
 
     return float(max(0.0, total_annuel))
-
 
 # ============================================================
 # CESSION DE BIENS (annuel)
@@ -256,7 +261,6 @@ def cession_biens_annuelle(cessions: list,
     annuel += tranche2 * r2_
     return float(max(0.0, annuel))
 
-
 # ============================================================
 # REVENUS (exo socio-pro) -> encode ANNUEL, applique mensuel, remonte ANNUEL
 # + ajout type "prestations_familiales"
@@ -278,15 +282,13 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
         elif t == "ale":
             total_m += max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0)))
         elif t == "prestations_familiales":
-            # PF encodées comme revenu annuel (comptées "standard")
             total_m += m
         else:
             total_m += m
     return float(max(0.0, total_m * 12.0))
 
-
 # ============================================================
-# ART.34 — MODE SIMPLE (comme ton code d'origine amélioré)
+# ART.34 — MODE SIMPLE
 # ============================================================
 def normalize_art34_type(raw_type: str) -> str:
     t = (raw_type or "").strip().lower()
@@ -344,9 +346,8 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         "cohabitants_part_a_compter_annuel": r2(part_m_par_dem * 12.0),
     }
 
-
 # ============================================================
-# ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
+# ART.34 — MENAGE AVANCE
 # ============================================================
 def make_pool_key(ids: list) -> str:
     a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
@@ -443,7 +444,6 @@ def compute_art34_menage_avance(dossier: dict,
         "debug_deg2": dbg2,
         "ris_injecte_mensuel": float(include_ris_m),
     }
-
 
 # ============================================================
 # CALCUL GLOBAL — OFFICIEL CPAS (ANNUEL puis /12)
@@ -590,7 +590,6 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict) -> dict:
         "ris_mois_suivants": float(ris_mensuel),
     }
 
-
 # ============================================================
 # EXPORT PDF
 # ============================================================
@@ -648,7 +647,6 @@ def try_make_pdf_from_text(text: str) -> BytesIO | None:
     c.save()
     buf.seek(0)
     return buf
-
 
 # ============================================================
 # UI STREAMLIT
@@ -715,18 +713,26 @@ with st.sidebar:
 # Blocs UI
 # ---------------------------
 def ui_revenus_annuels_block(prefix: str) -> list:
+    """Encodage mensuel OU annuel, mais stockage toujours en montant_annuel (base de calcul)."""
     lst = []
     nb = st.number_input(f"Nombre de revenus à encoder ({prefix})", min_value=0, value=1, step=1, key=f"{prefix}_nb")
+
     for i in range(int(nb)):
         st.markdown(f"**Revenu {i+1} ({prefix})**")
-        c1, c2, c3 = st.columns([2, 1, 1])
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+
         label = c1.text_input("Type/label", value="salaire/chômage", key=f"{prefix}_lab_{i}")
-        montant_a = c2.number_input("Montant net ANNUEL (€/an)", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_a_{i}")
-        typ = c3.selectbox(
+        period = c2.selectbox("Encodage", ["Mensuel", "Annuel"], index=1, key=f"{prefix}_per_{i}")
+        montant_in = c3.number_input("Montant net", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_amt_{i}")
+
+        typ = c4.selectbox(
             "Règle",
             ["standard", "socio_prof", "etudiant", "artistique_irregulier", "ale", "prestations_familiales"],
             key=f"{prefix}_t_{i}"
         )
+
+        montant_a = r2(annualize(montant_in, period))
+        st.caption(f"↳ Base calcul: {montant_a:.2f} €/an (≈ {montant_a/12.0:.2f} €/mois)")
 
         eligible = True
         ale_part_exc_m = 0.0
@@ -737,7 +743,7 @@ def ui_revenus_annuels_block(prefix: str) -> list:
 
         lst.append({
             "label": label,
-            "montant_annuel": float(montant_a),
+            "montant_annuel": float(montant_a),  # ✅ toujours annuel
             "type": typ,
             "eligible": eligible,
             "ale_part_excedentaire_mensuel": float(ale_part_exc_m)
@@ -779,7 +785,14 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
             ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
             key=f"{prefix}_coh_t_{i}"
         )
-        rev = c2.number_input("Revenus nets annuels (€/an)", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_coh_r_{i}")
+
+        # ✅ Encodage mensuel/annuel, stockage annuel dans revenu_net_annuel
+        c2a, c2b = c2.columns([1, 1])
+        per = c2a.selectbox("Encodage", ["Mensuel", "Annuel"], index=1, key=f"{prefix}_coh_per_{i}")
+        rev_in = c2b.number_input("Revenu net", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_coh_r_{i}")
+        rev = r2(annualize(rev_in, per))
+        st.caption(f"↳ Base calcul cohabitant: {rev:.2f} €/an (≈ {rev/12.0:.2f} €/mois)")
+
         excl = st.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
 
         if enable_pf_links:
@@ -916,12 +929,12 @@ if multi_mode:
 
         is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
 
-        st.markdown("**Revenus nets ANNUELS (demandeur 1)**")
+        st.markdown("**Revenus nets (demandeur 1)**")
         rev1 = ui_revenus_annuels_block(f"hd_rev1_{i}")
 
         rev2 = []
         if is_couple:
-            st.markdown("**Revenus nets ANNUELS (demandeur 2 / conjoint)**")
+            st.markdown("**Revenus nets (demandeur 2 / conjoint)**")
             rev2 = ui_revenus_annuels_block(f"hd_rev2_{i}")
 
         st.markdown("**PF à compter (spécifiques à CE dossier)**")
@@ -985,7 +998,14 @@ if multi_mode:
             c1, c2, c3 = st.columns([2, 1, 1])
             mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
             name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
-            rev_a = c2.number_input("Revenus nets annuels (€/an) à prendre en compte", min_value=0.0, value=0.0, step=100.0, key=f"mem_rev_{j}")
+
+            # ✅ Encodage mensuel/annuel, stockage annuel
+            c2a, c2b = c2.columns([1, 1])
+            per = c2a.selectbox("Encodage", ["Mensuel", "Annuel"], index=1, key=f"mem_per_{j}")
+            rev_in = c2b.number_input("Revenu net", min_value=0.0, value=0.0, step=100.0, key=f"mem_rev_{j}")
+            rev_a = r2(annualize(rev_in, per))
+            st.caption(f"↳ Base calcul membre: {rev_a:.2f} €/an (≈ {rev_a/12.0:.2f} €/mois)")
+
             excl = c3.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
             m = {
                 "id": str(mid).strip(),
@@ -1214,7 +1234,7 @@ if multi_mode:
 
 
 # ------------------------------------------------------------
-# MODE 1 DEMANDEUR (ton flux d’origine)
+# MODE 1 DEMANDEUR
 # ------------------------------------------------------------
 else:
     answers = {}
@@ -1228,7 +1248,7 @@ else:
     answers["date_demande"] = st.date_input("Date de la demande", value=date.today())
 
     st.divider()
-    st.subheader("1) Revenus du demandeur — ANNUELS (nets)")
+    st.subheader("1) Revenus du demandeur — nets (mensuel OU annuel)")
     answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE (2 demandeurs ensemble)", value=False)
 
     st.markdown("**Demandeur 1**")
