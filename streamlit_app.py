@@ -852,62 +852,109 @@ def make_decision_pdf_cpas(
         return f"standard : {euro(a)} €/an (soit {euro(m)} €/mois)"
 
     def render_revenus_block(title: str, revenus_list: list):
+        
         story.append(Paragraph(title, h3))
         if not revenus_list:
-            story.append(Paragraph("Aucun revenu encodé.", base))
-            return
+        story.append(Paragraph("Aucun revenu encodé.", base))
+        return
 
-        rows = [["Type/label", "Règle", "Calcul (détail)", "Montant compté (annuel)"]]
-        total_ann = 0.0
+    # Styles dédiés aux cellules (wrap propre)
+    cell = ParagraphStyle(
+        "cell",
+        parent=base,
+        fontSize=9,
+        leading=11,
+        wordWrap="CJK",   # wrap robuste même avec symboles/€ etc.
+    )
+    cell_small = ParagraphStyle(
+        "cell_small",
+        parent=cell,
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.black
+    )
+    head = ParagraphStyle(
+        "head",
+        parent=cell,
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11
+    )
 
-        for r in revenus_list:
-            label = _safe(r.get("label", ""))
-            typ = _safe(r.get("type", "standard"))
+    rows = [
+        [
+            Paragraph("Type/label", head),
+            Paragraph("Règle", head),
+            Paragraph("Calcul (détail)", head),
+            Paragraph("Montant compté (annuel)", head),
+        ]
+    ]
 
-            # Reconstituer le montant "compté annuel" avec nos règles (pour afficher proprement)
-            if typ == "ale" and "nb_cheques_mois" in r:
-                nb = float(r.get("nb_cheques_mois", 0.0))
-                _brut_m, _exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
-                compt_ann = float(a_compter_m) * 12.0
+    total_ann = 0.0
+
+    for r in revenus_list:
+        label = _safe(r.get("label", ""))
+        typ = _safe(r.get("type", "standard"))
+
+        # ---- Montant compté annuel (item par item) ----
+        if typ == "ale" and "nb_cheques_mois" in r:
+            nb = float(r.get("nb_cheques_mois", 0.0))
+            _brut_m, _exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
+            compt_ann = float(a_compter_m) * 12.0
+        else:
+            a = max(0.0, float(r.get("montant_annuel", 0.0)))
+            m = a / 12.0
+            eligible = bool(r.get("eligible", True))
+
+            if typ in ("socio_prof", "etudiant") and eligible:
+                ded = min(float(cfg_soc.get("max_mensuel", 0.0)), m)
+                compt_ann = max(0.0, (m - ded) * 12.0)
+            elif typ == "artistique_irregulier" and eligible:
+                ded_m = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
+                compt_ann = max(0.0, (m - min(ded_m, m)) * 12.0)
+            elif typ == "ale":
+                compt_ann = max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0))) * 12.0
             else:
-                # on utilise la même logique que le moteur: on recalculera via revenus_annuels_apres_exonerations
-                # mais ici, item par item:
-                a = max(0.0, float(r.get("montant_annuel", 0.0)))
-                m = a / 12.0
-                eligible = bool(r.get("eligible", True))
-                if typ in ("socio_prof", "etudiant") and eligible:
-                    ded = min(float(cfg_soc.get("max_mensuel", 0.0)), m)
-                    compt_ann = max(0.0, (m - ded) * 12.0)
-                elif typ == "artistique_irregulier" and eligible:
-                    ded_m = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
-                    compt_ann = max(0.0, (m - min(ded_m, m)) * 12.0)
-                elif typ == "ale":
-                    # compat: champ "part excédentaire mensuelle"
-                    compt_ann = max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0))) * 12.0
-                else:
-                    compt_ann = a
+                compt_ann = a
 
-            total_ann += float(compt_ann)
+        total_ann += float(compt_ann)
 
-            rows.append([
-                label,
-                typ,
-                revenu_detail_line(r),
-                f"{euro(compt_ann)} €"
-            ])
+        # Détail (texte long) -> Paragraph obligatoire pour wrap
+        detail_txt = revenu_detail_line(r)
 
-        story.append(money_table(rows, col_widths=[5.2*cm, 2.3*cm, 6.0*cm, 3.7*cm]))
-        story.append(Spacer(1, 4))
+        rows.append([
+            Paragraph(label or "&nbsp;", cell),
+            Paragraph(typ or "&nbsp;", cell),
+            Paragraph(detail_txt or "&nbsp;", cell_small),   # colonne “Calcul” en plus petit
+            Paragraph(f"{euro(compt_ann)} €", cell),
+        ])
 
-        story.append(Paragraph(
-            f"<font size=9 color='grey'>"
-            f"Exo socio-pro max : {euro(cfg_soc.get('max_mensuel',0))} €/mois — "
-            f"Exo artistique irrégulier : {euro(cfg_soc.get('artistique_annuel',0))} €/an — "
-            f"ALE : valeur chèque = {euro(cfg_ale.get('valeur_cheque',0))} € ; exonération = {euro(cfg_ale.get('exon_par_cheque',6))} €/chèque"
-            f"</font>",
-            small
-        ))
-        story.append(Paragraph(f"<font size=9 color='grey'>Total revenus comptés (annuel) pour ce bloc : {euro(total_ann)} €</font>", small))
+    # Largeur de colonnes: donner de l’air à “Calcul (détail)”
+    tbl = Table(rows, colWidths=[4.7*cm, 2.0*cm, 7.2*cm, 3.7*cm])
+    tbl.setStyle(TableStyle([
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("LINEBELOW", (0,0), (-1,0), 0.6, colors.black),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
+        ("LEFTPADDING", (0,0), (-1,-1), 4),
+        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+        ("TOPPADDING", (0,0), (-1,-1), 3),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ]))
+    story.append(tbl)
+
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(
+        f"<font size=9 color='grey'>"
+        f"Exo socio-pro max : {euro(cfg_soc.get('max_mensuel',0))} €/mois — "
+        f"Exo artistique irrégulier : {euro(cfg_soc.get('artistique_annuel',0))} €/an — "
+        f"ALE : valeur chèque = {euro(cfg_ale.get('valeur_cheque',0))} € ; exonération = {euro(cfg_ale.get('exon_par_cheque',6))} €/chèque"
+        f"</font>",
+        small
+    ))
+    story.append(Paragraph(
+        f"<font size=9 color='grey'>Total revenus comptés (annuel) pour ce bloc : {euro(total_ann)} €</font>",
+        small
+    ))
 
     def render_cohabitants_block(cohabitants: list, res_seg: dict):
         story.append(Paragraph("Ressources des cohabitants :", h3))
