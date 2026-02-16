@@ -10,7 +10,7 @@ import streamlit as st
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
 # ============================================================
 DEFAULT_ENGINE = {
-    "version": "1.4",
+    "version": "1.5",
     "config": {
         # Taux RIS ANNUELS (référence) ✅
         "ris_rates_annuel": {"cohab": 10513.60, "isole": 15770.41, "fam_charge": 21312.87},
@@ -57,8 +57,11 @@ DEFAULT_ENGINE = {
             "abattements_annuels": {"cat1": 1250.0, "cat2": 2000.0, "cat3": 2500.0}
         },
 
-        # ALE
-        "ale": {"exon_mensuelle": 4.10}
+        # ALE (✅ valeur du chèque indexable + exonération par chèque)
+        "ale": {
+            "valeur_cheque": 0.0,     # <- à encoder/indexer dans la sidebar
+            "exon_par_cheque": 6.0    # <- exonération fixe / chèque
+        }
     }
 }
 
@@ -114,6 +117,12 @@ def normalize_engine(raw: dict) -> dict:
     if "pf" not in cfg:
         cfg["pf"] = {"pf_mensuel_defaut": 0.0}
     cfg["pf"]["pf_mensuel_defaut"] = float(cfg["pf"].get("pf_mensuel_defaut", 0.0))
+
+    # ALE defaults + compat
+    if "ale" not in cfg:
+        cfg["ale"] = {"valeur_cheque": 0.0, "exon_par_cheque": 6.0}
+    cfg["ale"]["valeur_cheque"] = float(cfg["ale"].get("valeur_cheque", 0.0))
+    cfg["ale"]["exon_par_cheque"] = float(cfg["ale"].get("exon_par_cheque", 6.0))
 
     return engine
 
@@ -271,15 +280,46 @@ def cession_biens_annuelle(cessions: list,
 
 
 # ============================================================
-# REVENUS (exo socio-pro) - stock en ANNUEL
+# REVENUS
+#   - On stocke en ANNUEL pour le moteur
+#   - ALE: encodage en "nombre de chèques/mois" + valeur chèque indexable
 # ============================================================
-def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> float:
+def _ale_montants(nb_cheques_mois: float, cfg_ale: dict) -> tuple[float, float, float]:
+    """
+    Retourne (brut_mensuel, exo_mensuelle, a_compter_mensuel) pour ALE
+    brut = nb * valeur_chèque
+    exo  = nb * exon_par_cheque
+    a_compter = max(0, brut - exo)
+    """
+    nb = max(0.0, float(nb_cheques_mois))
+    val = max(0.0, float(cfg_ale.get("valeur_cheque", 0.0)))
+    exo = max(0.0, float(cfg_ale.get("exon_par_cheque", 6.0)))
+    brut_m = nb * val
+    exo_m = nb * exo
+    a_compter_m = max(0.0, brut_m - exo_m)
+    return r2(brut_m), r2(exo_m), r2(a_compter_m)
+
+
+def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict, cfg_ale: dict) -> float:
     total_m = 0.0
     for r in revenus_annuels:
-        a = max(0.0, float(r.get("montant_annuel", 0.0)))
-        m = a / 12.0
         t = r.get("type", "standard")
         eligible = bool(r.get("eligible", True))
+
+        # ---- ALE: priorité au nb de chèques/mois ----
+        if t == "ale":
+            # Nouveau modèle: nb_cheques_mois
+            if "nb_cheques_mois" in r:
+                brut_m, exo_m, a_compter_m = _ale_montants(r.get("nb_cheques_mois", 0), cfg_ale)
+                total_m += a_compter_m
+            else:
+                # Compat: ancien champ déjà "part excédentaire mensuelle"
+                total_m += max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0)))
+            continue
+
+        # ---- Le reste: on lit le montant annuel encodé ----
+        a = max(0.0, float(r.get("montant_annuel", 0.0)))
+        m = a / 12.0
 
         if t in ("socio_prof", "etudiant") and eligible:
             ded = min(float(cfg_soc["max_mensuel"]), m)
@@ -287,12 +327,11 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
         elif t == "artistique_irregulier" and eligible:
             ded_m = float(cfg_soc["artistique_annuel"]) / 12.0
             total_m += max(0.0, m - min(ded_m, m))
-        elif t == "ale":
-            total_m += max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0)))
         elif t == "prestations_familiales":
             total_m += m
         else:
             total_m += m
+
     return float(max(0.0, total_m * 12.0))
 
 
@@ -352,8 +391,6 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
             revenus_debiteurs_m += revenu_m
             nb_debiteurs += 1
             detail_debiteurs.append({"type": typ, "mensuel": r2(revenu_m), "annuel": r2(revenu_ann)})
-        else:
-            pass
 
     part_debiteurs_m = max(0.0, revenus_debiteurs_m - (nb_debiteurs * taux))
 
@@ -499,12 +536,14 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
 
     revenus_demandeur_annuels = revenus_annuels_apres_exonerations(
         answers.get("revenus_demandeur_annuels", []),
-        cfg["socio_prof"]
+        cfg["socio_prof"],
+        cfg["ale"]
     )
     if bool(answers.get("couple_demandeur", False)):
         revenus_conjoint_annuels = revenus_annuels_apres_exonerations(
             answers.get("revenus_conjoint_annuels", []),
-            cfg["socio_prof"]
+            cfg["socio_prof"],
+            cfg["ale"]
         )
         revenus_demandeur_annuels += revenus_conjoint_annuels
     revenus_demandeur_annuels = r2(revenus_demandeur_annuels)
@@ -535,7 +574,6 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         cfg_cap=cfg["capital_mobilier"]
     ))
 
-    # MODE SIMPLE art.34 (cohabitants)
     art34 = cohabitants_art34_part_mensuelle_cpas(
         cohabitants=answers.get("cohabitants_art34", []),
         taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
@@ -671,6 +709,7 @@ def compute_first_month_segments(answers: dict, engine: dict) -> dict:
 
 # ============================================================
 # PDF — VERSION "CPAS"
+#   ✅ On affiche les calculs (ALE + exo socio-pro) dans le bloc revenus
 # ============================================================
 def euro(x: float) -> str:
     x = float(x or 0.0)
@@ -696,6 +735,8 @@ def make_decision_pdf_cpas(
     res_mois_suivants: dict,
     seg_first_month: dict | None = None,
     logo_path: str = "logo.png",
+    cfg_soc: dict | None = None,
+    cfg_ale: dict | None = None,
 ) -> BytesIO | None:
     try:
         from reportlab.lib.pagesizes import A4
@@ -708,6 +749,9 @@ def make_decision_pdf_cpas(
         from reportlab.lib import colors
     except Exception:
         return None
+
+    cfg_soc = cfg_soc or {"max_mensuel": 0.0, "artistique_annuel": 0.0}
+    cfg_ale = cfg_ale or {"valeur_cheque": 0.0, "exon_par_cheque": 6.0}
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
@@ -731,7 +775,7 @@ def make_decision_pdf_cpas(
         logo_elem = Image(logo_path, width=3.0*cm, height=3.0*cm)
 
     header_data = [
-        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul du RI", h1)],
+        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul RIS", h1)],
         ["", Paragraph(f"Dossier : <b>{_safe(dossier_label)}</b>", base)],
     ]
     header_tbl = Table(header_data, colWidths=[3.2*cm, 13.0*cm])
@@ -767,7 +811,7 @@ def make_decision_pdf_cpas(
         tbl = Table(rows, colWidths=col_widths)
         tbl.setStyle(TableStyle([
             ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-            ("FONTSIZE", (0,0), (-1,-1), 9.5),
+            ("FONTSIZE", (0,0), (-1,-1), 9.2),
             ("VALIGN", (0,0), (-1,-1), "TOP"),
             ("LINEBELOW", (0,0), (-1,0), 0.5, colors.black),
             ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
@@ -778,25 +822,92 @@ def make_decision_pdf_cpas(
         ]))
         return tbl
 
-    def render_revenus_block(title: str, revenus_list: list, cfg_soc: dict):
+    def revenu_detail_line(r: dict) -> str:
+        typ = (r.get("type") or "standard").strip()
+        eligible = bool(r.get("eligible", True))
+
+        if typ == "ale":
+            nb = float(r.get("nb_cheques_mois", 0.0))
+            brut_m, exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
+            val = float(cfg_ale.get("valeur_cheque", 0.0))
+            exo = float(cfg_ale.get("exon_par_cheque", 6.0))
+            return f"ALE : {nb:g} chq/mois × {euro(val)} € − {nb:g} × {euro(exo)} € = {euro(a_compter_m)} €/mois (soit {euro(a_compter_m*12)} €/an)"
+
+        a = float(r.get("montant_annuel", 0.0))
+        m = a / 12.0
+
+        if typ in ("socio_prof", "etudiant"):
+            if not eligible:
+                return f"{typ} : non éligible → montant compté = {euro(a)} €/an"
+            ded = min(float(cfg_soc.get("max_mensuel", 0.0)), m)
+            compt_m = max(0.0, m - ded)
+            return f"{typ} : {euro(m)} €/mois − min({euro(cfg_soc.get('max_mensuel',0))} €/mois, {euro(m)} €/mois) = {euro(compt_m)} €/mois (×12)"
+        if typ == "artistique_irregulier":
+            if not eligible:
+                return f"artistique irrégulier : non éligible → montant compté = {euro(a)} €/an"
+            ded_m = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
+            compt_m = max(0.0, m - min(ded_m, m))
+            return f"artistique irrégulier : {euro(m)} €/mois − min({euro(ded_m)} €/mois, {euro(m)} €/mois) = {euro(compt_m)} €/mois (×12)"
+
+        return f"standard : {euro(a)} €/an (soit {euro(m)} €/mois)"
+
+    def render_revenus_block(title: str, revenus_list: list):
         story.append(Paragraph(title, h3))
         if not revenus_list:
             story.append(Paragraph("Aucun revenu encodé.", base))
             return
 
-        rows = [["Type/label", "Règle", "Montant (annuel)"]]
+        rows = [["Type/label", "Règle", "Calcul (détail)", "Montant compté (annuel)"]]
+        total_ann = 0.0
+
         for r in revenus_list:
             label = _safe(r.get("label", ""))
             typ = _safe(r.get("type", "standard"))
-            a = float(r.get("montant_annuel", 0.0))
-            rows.append([label, typ, f"{euro(a)} €"])
-        story.append(money_table(rows, col_widths=[8.2*cm, 4.0*cm, 4.0*cm]))
+
+            # Reconstituer le montant "compté annuel" avec nos règles (pour afficher proprement)
+            if typ == "ale" and "nb_cheques_mois" in r:
+                nb = float(r.get("nb_cheques_mois", 0.0))
+                _brut_m, _exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
+                compt_ann = float(a_compter_m) * 12.0
+            else:
+                # on utilise la même logique que le moteur: on recalculera via revenus_annuels_apres_exonerations
+                # mais ici, item par item:
+                a = max(0.0, float(r.get("montant_annuel", 0.0)))
+                m = a / 12.0
+                eligible = bool(r.get("eligible", True))
+                if typ in ("socio_prof", "etudiant") and eligible:
+                    ded = min(float(cfg_soc.get("max_mensuel", 0.0)), m)
+                    compt_ann = max(0.0, (m - ded) * 12.0)
+                elif typ == "artistique_irregulier" and eligible:
+                    ded_m = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
+                    compt_ann = max(0.0, (m - min(ded_m, m)) * 12.0)
+                elif typ == "ale":
+                    # compat: champ "part excédentaire mensuelle"
+                    compt_ann = max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0))) * 12.0
+                else:
+                    compt_ann = a
+
+            total_ann += float(compt_ann)
+
+            rows.append([
+                label,
+                typ,
+                revenu_detail_line(r),
+                f"{euro(compt_ann)} €"
+            ])
+
+        story.append(money_table(rows, col_widths=[5.2*cm, 2.3*cm, 6.0*cm, 3.7*cm]))
         story.append(Spacer(1, 4))
+
         story.append(Paragraph(
-            f"<font size=9 color='grey'>Exo socio-pro max : {euro(cfg_soc.get('max_mensuel',0))} €/mois — "
-            f"Exo artistique irrégulier : {euro(cfg_soc.get('artistique_annuel',0))} €/an</font>",
+            f"<font size=9 color='grey'>"
+            f"Exo socio-pro max : {euro(cfg_soc.get('max_mensuel',0))} €/mois — "
+            f"Exo artistique irrégulier : {euro(cfg_soc.get('artistique_annuel',0))} €/an — "
+            f"ALE : valeur chèque = {euro(cfg_ale.get('valeur_cheque',0))} € ; exonération = {euro(cfg_ale.get('exon_par_cheque',6))} €/chèque"
+            f"</font>",
             small
         ))
+        story.append(Paragraph(f"<font size=9 color='grey'>Total revenus comptés (annuel) pour ce bloc : {euro(total_ann)} €</font>", small))
 
     def render_cohabitants_block(cohabitants: list, res_seg: dict):
         story.append(Paragraph("Ressources des cohabitants :", h3))
@@ -885,11 +996,10 @@ def make_decision_pdf_cpas(
 
         story.append(Paragraph("Ressources à considérer <font size=9>(ne pas oublier de déduire l’immunisation forfaitaire)</font> :", h2))
 
-        cfg_soc = engine["config"]["socio_prof"]
         story.append(Paragraph("Ressources propres :", h3))
-        render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []), cfg_soc)
+        render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
         if bool(answers_snapshot.get("couple_demandeur", False)):
-            render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []), cfg_soc)
+            render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
 
         cap_total = float(res_seg.get("capitaux_mobiliers_annuels", 0.0))
         immo_total = float(res_seg.get("immo_annuels", 0.0))
@@ -943,13 +1053,11 @@ def make_decision_pdf_cpas(
 # ============================================================
 # UI STREAMLIT
 # ============================================================
-# ✅ Titre de page demandé
 st.set_page_config(page_title="Calcul RIS", layout="centered")
 
 if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
-# ✅ Titre H1 demandé
 st.title("Calcul RIS")
 st.caption("Taux RIS ANNUELS (référence centime près). Revenus encodables mensuel OU annuel. Gestion départ cohabitant (segments CPAS).")
 
@@ -988,6 +1096,22 @@ with st.sidebar:
     )
 
     st.divider()
+    st.write("**ALE (chèques)** ✅")
+    cfg["ale"]["valeur_cheque"] = st.number_input(
+        "Valeur d'un chèque ALE (€)",
+        min_value=0.0,
+        value=float(cfg["ale"].get("valeur_cheque", 0.0)),
+        format="%.2f"
+    )
+    cfg["ale"]["exon_par_cheque"] = st.number_input(
+        "Exonération par chèque ALE (€)",
+        min_value=0.0,
+        value=float(cfg["ale"].get("exon_par_cheque", 6.0)),
+        format="%.2f"
+    )
+    st.caption("ALE compté (mensuel) = nb chèques/mois × (valeur chèque − exon/chèque), borné à 0.")
+
+    st.divider()
     st.write("**Immunisation simple (€/an)**")
     cfg["immunisation_simple_annuelle"]["cohab"] = st.number_input("Immu cohab (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["cohab"]), format="%.2f")
     cfg["immunisation_simple_annuelle"]["isole"] = st.number_input("Immu isolé (€/an)", min_value=0.0, value=float(cfg["immunisation_simple_annuelle"]["isole"]), format="%.2f")
@@ -1021,7 +1145,6 @@ def ui_revenus_block(prefix: str) -> list:
         c1, c2, c3 = st.columns([2, 1, 1])
 
         label = c1.text_input("Type/label", value="salaire/chômage", key=f"{prefix}_lab_{i}")
-        montant_annuel, _p = ui_money_period_input("Montant net", key_prefix=f"{prefix}_money_{i}", default=0.0, step=100.0)
 
         typ = c3.selectbox(
             "Règle",
@@ -1029,19 +1152,37 @@ def ui_revenus_block(prefix: str) -> list:
             key=f"{prefix}_t_{i}"
         )
 
+        # ---- ALE: encodage en NB chèques/mois (pas de mensuel/annuel “€” à encoder) ----
+        if typ == "ale":
+            nb_chq = c2.number_input("Nb chèques / mois", min_value=0, value=0, step=1, key=f"{prefix}_ale_n_{i}")
+            brut_m, exo_m, a_compter_m = _ale_montants(nb_chq, cfg["ale"])
+            st.caption(
+                f"ALE (calcul) : {nb_chq} × {cfg['ale']['valeur_cheque']:.2f} € = {brut_m:.2f} €/mois ; "
+                f"exo {nb_chq} × {cfg['ale']['exon_par_cheque']:.2f} € = {exo_m:.2f} €/mois ; "
+                f"à compter = {a_compter_m:.2f} €/mois (= {a_compter_m*12:.2f} €/an)"
+            )
+            lst.append({
+                "label": label,
+                "type": "ale",
+                "nb_cheques_mois": int(nb_chq),
+                # compat (pas utilisé si nb_cheques_mois présent)
+                "ale_part_excedentaire_mensuel": float(a_compter_m),
+                "eligible": True
+            })
+            continue
+
+        # ---- Autres revenus: encodage € mensuel/annuel ----
+        montant_annuel, _p = ui_money_period_input("Montant net", key_prefix=f"{prefix}_money_{i}", default=0.0, step=100.0)
+
         eligible = True
-        ale_part_exc_m = 0.0
         if typ in ("socio_prof", "etudiant", "artistique_irregulier"):
             eligible = st.checkbox("Éligible exonération ?", value=True, key=f"{prefix}_el_{i}")
-        if typ == "ale":
-            ale_part_exc_m = st.number_input("Part ALE à compter (>4,10€) (€/mois)", min_value=0.0, value=0.0, step=1.0, key=f"{prefix}_ale_{i}")
 
         lst.append({
             "label": label,
             "montant_annuel": float(montant_annuel),
             "type": typ,
             "eligible": eligible,
-            "ale_part_excedentaire_mensuel": float(ale_part_exc_m)
         })
     return lst
 
@@ -1066,7 +1207,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
             key=f"{prefix}_nb_partage"
         )
 
-    # ---- Cohabitants admissibles (MODE SIMPLE) ----
     cohabitants = []
     pf_links = []
 
@@ -1275,7 +1415,7 @@ if multi_mode:
         "hd_menage",
         nb_demandeurs=int(nb_dem),
         enable_pf_links=True,
-        show_simple_art34=not advanced_household  # ✅ masque le mode simple si ménage avancé
+        show_simple_art34=not advanced_household
     )
 
     # Inject PF-links
@@ -1340,7 +1480,6 @@ if multi_mode:
     if st.button("Calculer (multi)"):
         taux_art34 = float(cfg["art34"]["taux_a_laisser_mensuel"])
 
-        # plan de partage
         share_plan = {}
         if advanced_household:
             for d in dossiers:
@@ -1367,7 +1506,6 @@ if multi_mode:
 
         prior_results = [None] * len(dossiers)
 
-        # itérations convergence
         for _iter in range(4):
             pools = {}
             results_tmp = [None] * len(dossiers)
@@ -1432,7 +1570,6 @@ if multi_mode:
                     res["total_ressources_apres_immunisation_simple_annuel"] = float(total_apres)
                     res["ris_theorique_annuel"] = float(ris_ann)
                     res["ris_theorique_mensuel"] = float(ris_m)
-
                 else:
                     res = compute_officiel_cpas_annuel(answers, engine)
 
@@ -1490,21 +1627,22 @@ if multi_mode:
                         "deg2": r.get("debug_art34_deg2"),
                     })
 
-                # SEGMENTS POUR CE DOSSIER
                 seg = compute_first_month_segments(r["_answers_snapshot"], engine)
 
                 pdf_buf = make_decision_pdf_cpas(
                     dossier_label=r["_label"],
                     answers_snapshot=r["_answers_snapshot"],
-                    res_mois_suivants=r,      # mois suivants = résultat final du multi
-                    seg_first_month=seg,      # segments = découpage CPAS sur départs
-                    logo_path="logo.png"
+                    res_mois_suivants=r,
+                    seg_first_month=seg,
+                    logo_path="logo.png",
+                    cfg_soc=cfg["socio_prof"],
+                    cfg_ale=cfg["ale"],
                 )
                 if pdf_buf is not None:
                     st.download_button(
                         "⬇️ Export PDF décision (segments + mois suivants)",
                         data=pdf_buf,
-                        file_name=f"decision_RI_CPAS_{r['_label']}.pdf",
+                        file_name=f"decision_RIS_CPAS_{r['_label']}.pdf",
                         mime="application/pdf",
                         key=f"dl_pdf_{r['_label']}"
                     )
@@ -1527,7 +1665,7 @@ else:
     answers["date_demande"] = st.date_input("Date de la demande", value=date.today())
 
     st.divider()
-    st.subheader("1) Revenus du demandeur — encodage mensuel OU annuel")
+    st.subheader("1) Revenus du demandeur — encodage mensuel OU annuel (sauf ALE = chèques)")
     answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE (2 demandeurs ensemble)", value=False)
 
     st.markdown("**Demandeur 1**")
@@ -1549,7 +1687,6 @@ else:
         step=10.0
     )
 
-    # En single, on garde le mode simple visible (par défaut True)
     menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False, show_simple_art34=True)
     answers.update(menage)
 
@@ -1578,13 +1715,15 @@ else:
             answers_snapshot=answers,
             res_mois_suivants=res_suiv,
             seg_first_month=seg,
-            logo_path="logo.png"
+            logo_path="logo.png",
+            cfg_soc=cfg["socio_prof"],
+            cfg_ale=cfg["ale"],
         )
         if pdf_buf is not None:
             st.download_button(
                 "⬇️ Export PDF décision (segments + mois suivants)",
                 data=pdf_buf,
-                file_name="decision_RI_CPAS.pdf",
+                file_name="decision_RIS_CPAS.pdf",
                 mime="application/pdf"
             )
         else:
