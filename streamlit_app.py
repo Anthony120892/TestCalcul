@@ -852,11 +852,10 @@ def make_decision_pdf_cpas(
         return f"standard : {euro(a)} €/an (soit {euro(m)} €/mois)"
 
     def render_revenus_block(title: str, revenus_list: list):
-        
         story.append(Paragraph(title, h3))
         if not revenus_list:
-        story.append(Paragraph("Aucun revenu encodé.", base))
-        return
+            story.append(Paragraph("Aucun revenu encodé.", base))
+            return
 
     # Styles dédiés aux cellules (wrap propre)
     cell = ParagraphStyle(
