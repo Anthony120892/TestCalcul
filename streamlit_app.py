@@ -1,4 +1,4 @@
-import json
+       import json
 import os
 import calendar
 from datetime import date
@@ -15,7 +15,7 @@ DEFAULT_ENGINE = {
         # Taux RIS (mensuel)
         "ris_rates": {"cohab": 876.13, "isole": 1314.20, "fam_charge": 1776.07},
 
-        # Option: forcer un taux annuel exact (si tes feuilles utilisent un annuel exact différent)
+        # Option: forcer un taux annuel exact
         "ris_rates_annuel": {"cohab": None, "isole": None, "fam_charge": None},
 
         # Immunisation simple (annuelle)
@@ -110,7 +110,7 @@ def normalize_engine(raw: dict) -> dict:
         cfg["art34"].get("taux_a_laisser_mensuel", cfg["ris_rates"]["cohab"])
     )
 
-    # PF indexables (valeur de référence)
+    # PF indexables
     if "pf" not in cfg:
         cfg["pf"] = {"pf_mensuel_defaut": 0.0}
     cfg["pf"]["pf_mensuel_defaut"] = float(cfg["pf"].get("pf_mensuel_defaut", 0.0))
@@ -258,7 +258,7 @@ def cession_biens_annuelle(cessions: list,
 
 
 # ============================================================
-# REVENUS (exo socio-pro) -> encode ANNUEL, applique mensuel, remonte ANNUEL
+# REVENUS (exo socio-pro) -> encode ANNUEL
 # + ajout type "prestations_familiales"
 # ============================================================
 def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> float:
@@ -278,7 +278,6 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
         elif t == "ale":
             total_m += max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0)))
         elif t == "prestations_familiales":
-            # PF encodées comme revenu annuel (comptées "standard")
             total_m += m
         else:
             total_m += m
@@ -286,7 +285,7 @@ def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> 
 
 
 # ============================================================
-# ART.34 — MODE SIMPLE (comme ton code d'origine amélioré)
+# ART.34 — MODE SIMPLE
 # ============================================================
 def normalize_art34_type(raw_type: str) -> str:
     t = (raw_type or "").strip().lower()
@@ -884,6 +883,170 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
     return answers
 
 
+# ============================================================
+# NOUVEAU : MENAGE → PERSONNES → LIENS → DEMANDEURS
+# ============================================================
+RELATION_TYPES = [
+    "partenaire", "mariage",  # lien conjugal
+    "parent", "mere", "pere",  # ascendant direct
+    "enfant",                 # descendant direct
+    "grand_parent",           # ascendant 2e degré
+    "autre"
+]
+
+
+def _relation_is_partner(rel_type: str) -> bool:
+    return rel_type in ("partenaire", "mariage")
+
+
+def _relation_is_parent_of(rel_type: str) -> bool:
+    return rel_type in ("parent", "mere", "pere")
+
+
+def ui_household_people_and_links(prefix: str) -> dict:
+    """
+    Retourne:
+    {
+      "persons": [{"id","name","role_hint","exclude_from_art34","revenu_net_annuel"}...],
+      "relations": [{"a","b","type"}...],
+      "applicants": [person_id...],
+      "couple_groups": [{"a","b"}...],
+      "by_id": {...}
+    }
+    """
+    st.subheader("Étape 0 — Ménage : personnes & liens (base commune)")
+    st.caption("Ici tu poses le décor : qui vit dans le ménage, quels liens, et qui introduit une demande RIS.")
+
+    nb_p = st.number_input("Nombre de personnes à encoder", min_value=1, value=3, step=1, key=f"{prefix}_nb_p")
+
+    persons = []
+    for i in range(int(nb_p)):
+        st.markdown(f"### Personne {i+1}")
+        c1, c2, c3 = st.columns([1.2, 1.6, 1])
+        pid = c1.text_input("ID court (unique)", value=f"P{i+1}", key=f"{prefix}_pid_{i}")
+        name = c2.text_input("Nom / prénom (optionnel)", value="", key=f"{prefix}_pname_{i}")
+        role_hint = c3.selectbox("Rôle (indicatif)", ["adulte", "enfant", "parent", "autre"], key=f"{prefix}_prole_{i}")
+
+        c4, c5 = st.columns([1, 1])
+        revenu_ann = c4.number_input("Revenus nets annuels (€/an) — si débiteur potentiel", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_prev_{i}")
+        excl_art34 = c5.checkbox("Exclure d’art.34 (équité / non pris en compte)", value=False, key=f"{prefix}_pex_{i}")
+
+        pid = str(pid).strip()
+        if pid:
+            persons.append({
+                "id": pid,
+                "name": str(name).strip(),
+                "role_hint": role_hint,
+                "revenu_net_annuel": float(revenu_ann),
+                "exclure": bool(excl_art34),
+            })
+
+    by_id = {p["id"]: p for p in persons}
+
+    st.divider()
+    st.subheader("Liens (relations)")
+    st.caption("Encode les liens utiles : partenaire/mariage, parent-enfant, grands-parents…")
+    nb_r = st.number_input("Nombre de liens à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nb_r")
+
+    relations = []
+    ids = list(by_id.keys())
+    for j in range(int(nb_r)):
+        st.markdown(f"**Lien {j+1}**")
+        c1, c2, c3 = st.columns([1, 1, 1])
+        a = c1.selectbox("Personne A", options=ids, key=f"{prefix}_ra_{j}")
+        b = c2.selectbox("Personne B", options=ids, key=f"{prefix}_rb_{j}")
+        t = c3.selectbox("Type", options=RELATION_TYPES, key=f"{prefix}_rt_{j}")
+
+        if a != b:
+            relations.append({"a": a, "b": b, "type": t})
+
+    st.divider()
+    st.subheader("Qui demande un RIS ?")
+    applicants = st.multiselect(
+        "Sélectionne toutes les personnes qui introduisent une demande RIS (multi-demande automatique)",
+        options=ids,
+        default=[],
+        key=f"{prefix}_apps"
+    )
+
+    st.divider()
+    st.subheader("Regrouper certains demandeurs en COUPLE (1 dossier à 2 demandeurs)")
+    st.caption("Optionnel : tu peux déclarer qu’un couple introduit une seule demande ensemble.")
+    couple_groups = []
+    # on propose uniquement les paires de demandeurs
+    demander_ids = list(applicants)
+    if len(demander_ids) >= 2:
+        # suggestion automatique: si lien partenaire/mariage existe
+        suggested_pairs = []
+        rel_set = {(r["a"], r["b"], r["type"]) for r in relations}
+        rel_set |= {(r["b"], r["a"], r["type"]) for r in relations}
+
+        for i in range(len(demander_ids)):
+            for j in range(i + 1, len(demander_ids)):
+                a = demander_ids[i]
+                b = demander_ids[j]
+                if (a, b, "partenaire") in rel_set or (a, b, "mariage") in rel_set:
+                    suggested_pairs.append(f"{a} + {b}")
+
+        preselect = []
+        if suggested_pairs:
+            preselect = [suggested_pairs[0]]
+
+        picked = st.multiselect(
+            "Choisis les couples à regrouper (format A + B)",
+            options=sorted(set(suggested_pairs)),
+            default=preselect,
+            key=f"{prefix}_couples"
+        )
+        for s in picked:
+            try:
+                a, b = [x.strip() for x in s.split("+")]
+                if a in by_id and b in by_id:
+                    couple_groups.append({"a": a, "b": b})
+            except Exception:
+                pass
+
+    return {
+        "persons": persons,
+        "relations": relations,
+        "applicants": applicants,
+        "couple_groups": couple_groups,
+        "by_id": by_id
+    }
+
+
+def infer_art34_debtors_from_links(applicant_id: str, household: dict) -> tuple[list, list]:
+    """
+    Heuristique simple:
+      - partenaire/mariage: 1er degré
+      - parent/mère/père: 1er degré (le parent est débiteur)
+      - grand_parent: 2e degré
+    """
+    deg1, deg2 = set(), set()
+    rels = household.get("relations", [])
+    by_id = household.get("by_id", {})
+
+    for r in rels:
+        a, b, t = r["a"], r["b"], r["type"]
+        if applicant_id not in (a, b):
+            continue
+        other = b if applicant_id == a else a
+
+        if other not in by_id:
+            continue
+        if bool(by_id[other].get("exclure", False)):
+            continue
+
+        if _relation_is_partner(t):
+            deg1.add(other)
+        elif _relation_is_parent_of(t):
+            deg1.add(other)
+        elif t == "grand_parent":
+            deg2.add(other)
+
+    return sorted(deg1), sorted(deg2)
+
+
 # ------------------------------------------------------------
 # MODE DOSSIER
 # ------------------------------------------------------------
@@ -891,76 +1054,127 @@ st.subheader("Mode dossier")
 multi_mode = st.checkbox("Plusieurs demandes RIS — comparer / calculer un ménage", value=False)
 
 # ------------------------------------------------------------
-# MODE MULTI + MENAGE AVANCE
+# MODE MULTI (NOUVEAU : basé sur ménage/relations)
 # ------------------------------------------------------------
 if multi_mode:
+    # Étape 0: ménage & liens
+    hh = ui_household_people_and_links("hh0")
+
+    applicants = list(hh["applicants"])
+    if len(applicants) < 2:
+        st.warning("Pour le mode multi, sélectionne au moins 2 demandeurs RIS dans l’étape 0.")
+        st.stop()
+
+    st.divider()
     st.subheader("Choix du mode multi")
     advanced_household = st.checkbox(
-        "Ménage avancé (feuilles CPAS) : parents/couple + enfants + autres demandeurs + priorité + pools",
+        "Ménage avancé (feuilles CPAS) : débiteurs 1er/2e degré + pools + partage",
         value=True
     )
 
-    nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
+    # Construire les dossiers automatiquement
+    # - si un couple_group est défini, on crée 1 dossier couple
+    # - sinon 1 dossier par demandeur
+    couple_pairs = {(c["a"], c["b"]) for c in hh["couple_groups"]}
+    couple_pairs |= {(c["b"], c["a"]) for c in hh["couple_groups"]}
 
-    # -----------------------
-    # A) Encodage des dossiers
-    # -----------------------
-    st.subheader("A) Dossiers / demandes")
+    used = set()
     dossiers = []
-    for i in range(int(nb_dem)):
-        st.markdown(f"### Dossier {i+1}")
-        label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
-        cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
-        enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"hd_enf_{i}")
-        d_dem = st.date_input("Date de demande", value=date.today(), key=f"hd_date_{i}")
+    idx = 0
 
-        is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
+    # dossiers couples
+    for c in hh["couple_groups"]:
+        a, b = c["a"], c["b"]
+        if a in applicants and b in applicants and a not in used and b not in used:
+            used.add(a); used.add(b)
+            dossiers.append({
+                "idx": idx,
+                "label": f"Dossier couple {a}+{b}",
+                "categorie": "cohab",
+                "enfants_a_charge": 0,
+                "date_demande": date.today(),
+                "couple_demandeur": True,
+                "applicant_ids": [a, b],
+                "revenus_demandeur_annuels": [],
+                "revenus_conjoint_annuels": [],
+                "prestations_familiales_a_compter_mensuel": 0.0,
+                "share_art34": False,
+                "art34_deg1_ids": [],
+                "art34_deg2_ids": [],
+                "include_ris_from_dossiers": [],
+            })
+            idx += 1
 
-        st.markdown("**Revenus nets ANNUELS (demandeur 1)**")
-        rev1 = ui_revenus_annuels_block(f"hd_rev1_{i}")
-
-        rev2 = []
-        if is_couple:
-            st.markdown("**Revenus nets ANNUELS (demandeur 2 / conjoint)**")
-            rev2 = ui_revenus_annuels_block(f"hd_rev2_{i}")
-
-        st.markdown("**PF à compter (spécifiques à CE dossier)**")
-        st.caption("Astuce : si tu encodes les PF comme revenu annuel (type 'prestations_familiales'), laisse ce champ à 0 pour éviter un double comptage.")
-        pf_m = st.number_input(
-            "PF à compter (€/mois)",
-            min_value=0.0,
-            value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
-            step=10.0,
-            key=f"hd_pf_{i}"
-        )
-
-        share_art34 = st.checkbox(
-            "Enfant/Jeune demandeur : partager la part art.34 (si même groupe débiteurs) avec les autres dossiers marqués",
-            value=False,
-            key=f"hd_share_{i}"
-        )
-
+    # dossiers simples
+    for a in applicants:
+        if a in used:
+            continue
         dossiers.append({
-            "idx": i,
-            "label": label,
-            "categorie": cat,
-            "enfants_a_charge": int(enfants),
-            "date_demande": d_dem,
-            "couple_demandeur": bool(is_couple),
-            "revenus_demandeur_annuels": rev1,
-            "revenus_conjoint_annuels": rev2,
-            "prestations_familiales_a_compter_mensuel": float(pf_m),
-            "share_art34": bool(share_art34),
+            "idx": idx,
+            "label": f"Dossier {a}",
+            "categorie": "isole",
+            "enfants_a_charge": 0,
+            "date_demande": date.today(),
+            "couple_demandeur": False,
+            "applicant_ids": [a],
+            "revenus_demandeur_annuels": [],
+            "revenus_conjoint_annuels": [],
+            "prestations_familiales_a_compter_mensuel": 0.0,
+            "share_art34": False,
             "art34_deg1_ids": [],
             "art34_deg2_ids": [],
             "include_ris_from_dossiers": [],
         })
+        idx += 1
 
-    # -----------------------
+    nb_dem = len(dossiers)
+
+    st.info(f"{nb_dem} dossier(s) généré(s) automatiquement à partir du ménage. (Oui, c’est l’app qui fait le café maintenant ☕)")
+
+    # A) Encodage des dossiers (informations propres à la demande)
+    st.subheader("A) Dossiers / demandes (auto-créés depuis le ménage)")
+    for d in dossiers:
+        st.markdown(f"### {d['label']}")
+        # label éditable
+        d["label"] = st.text_input("Nom/Label", value=d["label"], key=f"auto_lab_{d['idx']}")
+
+        # catégorie
+        d["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], index=["cohab", "isole", "fam_charge"].index(d["categorie"]), key=f"auto_cat_{d['idx']}")
+
+        d["enfants_a_charge"] = st.number_input("Enfants à charge", min_value=0, value=int(d["enfants_a_charge"]), step=1, key=f"auto_enf_{d['idx']}")
+        d["date_demande"] = st.date_input("Date de demande", value=d["date_demande"], key=f"auto_date_{d['idx']}")
+
+        if d["couple_demandeur"]:
+            st.caption(f"Demandeur 1 = {d['applicant_ids'][0]} ; Demandeur 2 = {d['applicant_ids'][1]}")
+            st.markdown("**Revenus nets ANNUELS (demandeur 1)**")
+            d["revenus_demandeur_annuels"] = ui_revenus_annuels_block(f"auto_rev1_{d['idx']}")
+            st.markdown("**Revenus nets ANNUELS (demandeur 2 / conjoint)**")
+            d["revenus_conjoint_annuels"] = ui_revenus_annuels_block(f"auto_rev2_{d['idx']}")
+        else:
+            st.caption(f"Demandeur = {d['applicant_ids'][0]}")
+            st.markdown("**Revenus nets ANNUELS (demandeur)**")
+            d["revenus_demandeur_annuels"] = ui_revenus_annuels_block(f"auto_rev_{d['idx']}")
+            d["revenus_conjoint_annuels"] = []
+
+        st.markdown("**PF à compter (spécifiques à CE dossier)**")
+        st.caption("Si tu encodes les PF comme revenu annuel (type 'prestations_familiales'), mets ceci à 0 pour éviter un double comptage.")
+        d["prestations_familiales_a_compter_mensuel"] = st.number_input(
+            "PF à compter (€/mois)",
+            min_value=0.0,
+            value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+            step=10.0,
+            key=f"auto_pf_{d['idx']}"
+        )
+
+        d["share_art34"] = st.checkbox(
+            "Enfant/Jeune demandeur : partager la part art.34 (si même groupe débiteurs) avec les autres dossiers marqués",
+            value=False,
+            key=f"auto_share_{d['idx']}"
+        )
+
     # B) Ménage commun (capitaux/immo/cession/avantage + PF links)
-    # -----------------------
     st.subheader("B) Ménage (commun)")
-    menage_common = ui_menage_common("hd_menage", nb_demandeurs=int(nb_dem), enable_pf_links=True)
+    menage_common = ui_menage_common("auto_menage", nb_demandeurs=nb_dem, enable_pf_links=True)
 
     # Inject PF-links vers le bon dossier
     for link in menage_common.get("pf_links", []):
@@ -968,55 +1182,68 @@ if multi_mode:
         if 0 <= idx < len(dossiers):
             dossiers[idx]["prestations_familiales_a_compter_mensuel"] += float(link["pf_mensuel"])
 
-    # -----------------------
-    # C) Ménage avancé: membres + mapping des débiteurs par degré
-    # -----------------------
+    # C) Ménage avancé: membres = personnes du ménage (débit. potentiels)
     household = {"members": [], "members_by_id": {}}
 
     if advanced_household:
         st.divider()
-        st.subheader("C) Ménage avancé — Membres & débiteurs (art.34)")
-        st.caption("Encode ici les débiteurs potentiels (parents, grands-parents, etc.). Puis, pour chaque dossier, sélectionne le 1er et le 2e degré.")
+        st.subheader("C) Ménage avancé — débiteurs (auto depuis personnes) + degrés (auto depuis liens)")
+        st.caption("Les personnes encodées dans le ménage deviennent des débiteurs potentiels (si non exclues).")
 
-        nb_m = st.number_input("Nombre de membres (débit. potentiels) à encoder", min_value=0, value=3, step=1)
         members = []
-        for j in range(int(nb_m)):
-            st.markdown(f"**Membre {j+1}**")
-            c1, c2, c3 = st.columns([2, 1, 1])
-            mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
-            name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
-            rev_a = c2.number_input("Revenus nets annuels (€/an) à prendre en compte", min_value=0.0, value=0.0, step=100.0, key=f"mem_rev_{j}")
-            excl = c3.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
-            m = {
-                "id": str(mid).strip(),
-                "name": str(name).strip(),
-                "revenu_net_annuel": float(rev_a),
-                "exclure": bool(excl)
-            }
-            if m["id"]:
-                members.append(m)
+        for p in hh["persons"]:
+            if not p["id"]:
+                continue
+            members.append({
+                "id": p["id"],
+                "name": p.get("name", ""),
+                "revenu_net_annuel": float(p.get("revenu_net_annuel", 0.0)),
+                "exclure": bool(p.get("exclure", False)),
+            })
 
         members_by_id = {m["id"]: m for m in members if not m.get("exclure", False)}
         household = {"members": members, "members_by_id": members_by_id}
 
         ids_available = list(members_by_id.keys())
 
+        auto_fill = st.checkbox("Pré-remplir automatiquement les débiteurs 1er/2e degré à partir des liens", value=True)
+
         st.divider()
         st.subheader("D) Paramétrage art.34 par dossier (degrés + injections)")
         for d in dossiers:
             st.markdown(f"### {d['label']} — art.34")
+
+            # auto: si dossier couple, on prend union des deux demandeurs
+            if auto_fill:
+                deg1_set, deg2_set = set(), set()
+                for app_id in d["applicant_ids"]:
+                    dg1, dg2 = infer_art34_debtors_from_links(app_id, hh)
+                    deg1_set |= set(dg1)
+                    deg2_set |= set(dg2)
+
+                # remove applicants themselves from debtors
+                for app_id in d["applicant_ids"]:
+                    deg1_set.discard(app_id)
+                    deg2_set.discard(app_id)
+
+                # only keep candidates existing in members_by_id
+                deg1_def = [x for x in sorted(deg1_set) if x in members_by_id]
+                deg2_def = [x for x in sorted(deg2_set) if x in members_by_id]
+            else:
+                deg1_def, deg2_def = [], []
+
             c1, c2 = st.columns(2)
             d["art34_deg1_ids"] = c1.multiselect(
                 "Débiteurs 1er degré (prioritaires)",
                 options=ids_available,
-                default=[],
-                key=f"d_{d['idx']}_deg1"
+                default=deg1_def,
+                key=f"auto_deg1_{d['idx']}"
             )
             d["art34_deg2_ids"] = c2.multiselect(
                 "Débiteurs 2e degré (si 1er degré = 0 disponible)",
                 options=ids_available,
-                default=[],
-                key=f"d_{d['idx']}_deg2"
+                default=deg2_def,
+                key=f"auto_deg2_{d['idx']}"
             )
 
             d["include_ris_from_dossiers"] = st.multiselect(
@@ -1024,16 +1251,16 @@ if multi_mode:
                 options=[i for i in range(len(dossiers))],
                 format_func=lambda k: f"{k+1} — {dossiers[k]['label']}",
                 default=[],
-                key=f"d_{d['idx']}_risinj"
+                key=f"auto_risinj_{d['idx']}"
             )
 
+    # ---- CALCUL
     st.divider()
     if st.button("Calculer (multi)"):
         taux_art34 = float(cfg["art34"]["taux_a_laisser_mensuel"])
 
         # plan de partage (cas E6)
         share_plan = {}
-
         if advanced_household:
             for d in dossiers:
                 if not d.get("share_art34", False):
@@ -1049,10 +1276,10 @@ if multi_mode:
             for key, v in list(share_plan.items()):
                 try:
                     ids_str = key.replace("ids[", "").replace("]", "")
-                    ids = [x for x in ids_str.split(",") if x]
+                    ids_ = [x for x in ids_str.split(",") if x]
                 except Exception:
-                    ids = []
-                debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
+                    ids_ = []
+                debtors = [household["members_by_id"][i] for i in ids_ if i in household["members_by_id"]]
                 base = art34_group_excess_m(debtors, taux_art34, extra_income_m=0.0)
                 if v["count"] > 0:
                     v["per"] = r2(float(base) / float(v["count"]))
@@ -1087,15 +1314,16 @@ if multi_mode:
 
                     res = compute_officiel_cpas_annuel(answers, engine)
 
+                    # override art.34
                     res["art34_mode"] = art34_adv["art34_mode"]
                     res["art34_degree_utilise"] = art34_adv["art34_degree_utilise"]
                     res["ris_injecte_mensuel"] = art34_adv["ris_injecte_mensuel"]
                     res["debug_art34_deg1"] = art34_adv["debug_deg1"]
                     res["debug_art34_deg2"] = art34_adv["debug_deg2"]
-
                     res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
                     res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
 
+                    # recalcul totaux & RI
                     total_avant = (
                         float(res["revenus_demandeur_annuels"])
                         + float(res["capitaux_mobiliers_annuels"])
@@ -1130,7 +1358,6 @@ if multi_mode:
                     res["jours_dans_mois"] = pr["jours_dans_mois"]
                     res["jours_restants_inclus"] = pr["jours_restants_inclus"]
                     res["prorata_premier_mois"] = pr["prorata"]
-
                 else:
                     res = compute_officiel_cpas_annuel(answers, engine)
 
@@ -1214,7 +1441,7 @@ if multi_mode:
 
 
 # ------------------------------------------------------------
-# MODE 1 DEMANDEUR (ton flux d’origine)
+# MODE 1 DEMANDEUR (inchangé)
 # ------------------------------------------------------------
 else:
     answers = {}
