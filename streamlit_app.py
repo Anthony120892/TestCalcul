@@ -344,15 +344,24 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          partage_active: bool,
                                          nb_demandeurs_a_partager: int,
                                          as_of: date) -> dict:
+    """
+    Règle CPAS attendue (cas réel) :
+    - PARTENAIRE : ressources cohabitant comptées "plein pot" (pas de taux à laisser)
+    - DÉBITEURS (direct 1/2) : art.34 avec taux à laisser
+    """
     taux = max(0.0, float(taux_a_laisser_mensuel))
 
+    # 1) Partenaire(s) : revenu mensuel TOTAL compté
+    revenus_partenaire_m = 0.0
+    nb_partenaire = 0
+
+    # 2) Débiteurs : revenu mensuel total - n*taux
     revenus_debiteurs_m = 0.0
     nb_debiteurs = 0
 
     for c in cohabitants:
         typ = normalize_art34_type(c.get("type", "autre"))
-        if typ not in ADMISSIBLES_ART34:
-            continue
+
         if bool(c.get("exclure", False)):
             continue
         if not cohabitant_is_active_asof(c, as_of):
@@ -361,33 +370,50 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         revenu_ann = max(0.0, float(c.get("revenu_net_annuel", 0.0)))
         revenu_m = revenu_ann / 12.0
 
-        revenus_debiteurs_m += revenu_m
-        nb_debiteurs += 1  # IMPORTANT: même si revenu = 0
+        if typ == "partenaire":
+            revenus_partenaire_m += revenu_m
+            nb_partenaire += 1
+        elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
+            revenus_debiteurs_m += revenu_m
+            nb_debiteurs += 1
+        else:
+            # autres types : ignorés dans ce bloc
+            pass
 
-    part_m = max(0.0, revenus_debiteurs_m - (nb_debiteurs * taux))
+    # Part art.34 des débiteurs (mensuel)
+    part_debiteurs_m = max(0.0, revenus_debiteurs_m - (nb_debiteurs * taux))
 
+    # Partage éventuel (uniquement sur la partie "débiteurs")
     if partage_active:
         n = max(1, int(nb_demandeurs_a_partager))
-        part_m_par_dem = part_m / n
+        part_debiteurs_m_par_dem = part_debiteurs_m / n
     else:
-        part_m_par_dem = part_m
+        part_debiteurs_m_par_dem = part_debiteurs_m
 
-    part_m = r2(part_m)
-    part_m_par_dem = r2(part_m_par_dem)
+    # Total cohabitants à compter = partenaire FULL + débiteurs (éventuellement partagé)
+    total_cohabitants_m = revenus_partenaire_m + part_debiteurs_m_par_dem
+
+    # Arrondis
+    revenus_partenaire_m = r2(revenus_partenaire_m)
+    revenus_debiteurs_m = r2(revenus_debiteurs_m)
+    part_debiteurs_m = r2(part_debiteurs_m)
+    part_debiteurs_m_par_dem = r2(part_debiteurs_m_par_dem)
+    total_cohabitants_m = r2(total_cohabitants_m)
 
     return {
-        "cohabitants_n_pris_en_compte": int(nb_debiteurs),
-        "revenus_debiteurs_mensuels_total": r2(revenus_debiteurs_m),
-        "cohabitants_part_totale_avant_partage_mensuel": part_m,
-        "cohabitants_part_a_compter_mensuel": part_m_par_dem,
-        "cohabitants_part_a_compter_annuel": r2(part_m_par_dem * 12.0),
+        "cohabitants_n_partenaire_pris_en_compte": int(nb_partenaire),
+        "cohabitants_n_debiteurs_pris_en_compte": int(nb_debiteurs),
+
+        "revenus_partenaire_mensuels_total": float(revenus_partenaire_m),
+        "revenus_debiteurs_mensuels_total": float(revenus_debiteurs_m),
+
+        "cohabitants_part_debiteurs_avant_partage_mensuel": float(part_debiteurs_m),
+        "cohabitants_part_debiteurs_apres_partage_mensuel": float(part_debiteurs_m_par_dem),
+
+        "cohabitants_part_a_compter_mensuel": float(total_cohabitants_m),
+        "cohabitants_part_a_compter_annuel": float(r2(total_cohabitants_m * 12.0)),
     }
-
-
-# ============================================================
-# ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
-# + revenus membres encodables mensuel/annuel (stockés en annuel)
-# ============================================================
+==========================
 def make_pool_key(ids: list) -> str:
     a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
     return f"ids[{a}]"
@@ -710,6 +736,7 @@ def build_decision_text(dossier_label: str, res: dict) -> str:
     lines.append(f"Taux RIS mensuel (dérivé): {res['taux_ris_mensuel_derive']:.2f} €")
     lines.append("")
     lines.append("Ressources (annuel):")
+    lines.append(f"- Ressources cohabitants (annuel): {res['cohabitants_part_a_compter_annuel']:.2f} €")
     lines.append(f"- Revenus demandeur: {res['revenus_demandeur_annuels']:.2f} €")
     lines.append(f"- Capitaux mobiliers: {res['capitaux_mobiliers_annuels']:.2f} €")
     lines.append(f"- Immobilier: {res['immo_annuels']:.2f} €")
