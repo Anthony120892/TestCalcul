@@ -535,6 +535,7 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         cfg_cap=cfg["capital_mobilier"]
     ))
 
+    # MODE SIMPLE art.34 (cohabitants)
     art34 = cohabitants_art34_part_mensuelle_cpas(
         cohabitants=answers.get("cohabitants_art34", []),
         taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
@@ -942,12 +943,14 @@ def make_decision_pdf_cpas(
 # ============================================================
 # UI STREAMLIT
 # ============================================================
-st.set_page_config(page_title="Calcul RIS (CPAS officiel)", layout="centered")
+# ✅ Titre de page demandé
+st.set_page_config(page_title="Calcul RIS", layout="centered")
 
 if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
-st.title("Calcul RIS — Prototype (CPAS officiel : annuel → /12 + segments)")
+# ✅ Titre H1 demandé
+st.title("Calcul RIS")
 st.caption("Taux RIS ANNUELS (référence centime près). Revenus encodables mensuel OU annuel. Gestion départ cohabitant (segments CPAS).")
 
 engine = load_engine()
@@ -1043,7 +1046,8 @@ def ui_revenus_block(prefix: str) -> list:
     return lst
 
 
-def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> dict:
+# ✅ show_simple_art34 ajouté : quand False, on masque le bloc "Cohabitants admissibles (mode simple)"
+def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, show_simple_art34: bool = True) -> dict:
     answers = {}
 
     st.divider()
@@ -1062,45 +1066,50 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
             key=f"{prefix}_nb_partage"
         )
 
-    st.markdown("### Cohabitants admissibles (art.34) — mode simple")
-    st.caption("Tu peux encoder la date de départ du ménage. Après cette date, la personne ne compte plus.")
-    nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nbcoh")
-
+    # ---- Cohabitants admissibles (MODE SIMPLE) ----
     cohabitants = []
     pf_links = []
 
-    for i in range(int(nb_coh)):
-        st.markdown(f"**Cohabitant {i+1}**")
-        c1, c2, c3 = st.columns([2, 1, 1])
-        typ = c1.selectbox(
-            "Type",
-            ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
-            key=f"{prefix}_coh_t_{i}"
-        )
+    if show_simple_art34:
+        st.markdown("### Cohabitants admissibles (art.34) — mode simple")
+        st.caption("Tu peux encoder la date de départ du ménage. Après cette date, la personne ne compte plus.")
+        nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nbcoh")
 
-        rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"{prefix}_coh_rev_{i}", default=0.0, step=100.0)
-        excl = c3.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
+        for i in range(int(nb_coh)):
+            st.markdown(f"**Cohabitant {i+1}**")
+            c1, c2, c3 = st.columns([2, 1, 1])
+            typ = c1.selectbox(
+                "Type",
+                ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
+                key=f"{prefix}_coh_t_{i}"
+            )
 
-        dq = st.date_input(
-            "Date de départ du ménage (optionnel) — dernier jour ensemble",
-            value=None,
-            key=f"{prefix}_coh_dq_{i}"
-        )
+            rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"{prefix}_coh_rev_{i}", default=0.0, step=100.0)
+            excl = c3.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
 
-        if enable_pf_links:
-            c4, c5, c6 = st.columns([1.2, 1, 1])
-            has_pf = c4.checkbox("PF perçues ?", value=False, key=f"{prefix}_coh_pf_yes_{i}")
-            if has_pf:
-                pf_m = c5.number_input("PF (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"{prefix}_coh_pf_m_{i}")
-                dem_idx = c6.number_input("Pour demandeur #", min_value=1, max_value=nb_demandeurs, value=1, step=1, key=f"{prefix}_coh_pf_dem_{i}")
-                pf_links.append({"dem_index": int(dem_idx) - 1, "pf_mensuel": float(pf_m)})
+            dq = st.date_input(
+                "Date de départ du ménage (optionnel) — dernier jour ensemble",
+                value=None,
+                key=f"{prefix}_coh_dq_{i}"
+            )
 
-        cohabitants.append({
-            "type": typ,
-            "revenu_net_annuel": float(rev_annuel),
-            "exclure": bool(excl),
-            "date_quitte_menage": str(dq) if isinstance(dq, date) else None
-        })
+            if enable_pf_links:
+                c4, c5, c6 = st.columns([1.2, 1, 1])
+                has_pf = c4.checkbox("PF perçues ?", value=False, key=f"{prefix}_coh_pf_yes_{i}")
+                if has_pf:
+                    pf_m = c5.number_input("PF (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"{prefix}_coh_pf_m_{i}")
+                    dem_idx = c6.number_input("Pour demandeur #", min_value=1, max_value=nb_demandeurs, value=1, step=1, key=f"{prefix}_coh_pf_dem_{i}")
+                    pf_links.append({"dem_index": int(dem_idx) - 1, "pf_mensuel": float(pf_m)})
+
+            cohabitants.append({
+                "type": typ,
+                "revenu_net_annuel": float(rev_annuel),
+                "exclure": bool(excl),
+                "date_quitte_menage": str(dq) if isinstance(dq, date) else None
+            })
+    else:
+        st.markdown("### Cohabitants admissibles (art.34) — mode simple")
+        st.info("Masqué car **Ménage avancé** activé (art.34 géré via Membres & débiteurs).")
 
     answers["cohabitants_art34"] = cohabitants
     answers["pf_links"] = pf_links
@@ -1262,7 +1271,12 @@ if multi_mode:
 
     # B) Ménage commun
     st.subheader("B) Ménage (commun)")
-    menage_common = ui_menage_common("hd_menage", nb_demandeurs=int(nb_dem), enable_pf_links=True)
+    menage_common = ui_menage_common(
+        "hd_menage",
+        nb_demandeurs=int(nb_dem),
+        enable_pf_links=True,
+        show_simple_art34=not advanced_household  # ✅ masque le mode simple si ménage avancé
+    )
 
     # Inject PF-links
     for link in menage_common.get("pf_links", []):
@@ -1476,7 +1490,7 @@ if multi_mode:
                         "deg2": r.get("debug_art34_deg2"),
                     })
 
-                # SEGMENTS POUR CE DOSSIER (PDF plus long, comme demandé)
+                # SEGMENTS POUR CE DOSSIER
                 seg = compute_first_month_segments(r["_answers_snapshot"], engine)
 
                 pdf_buf = make_decision_pdf_cpas(
@@ -1535,7 +1549,8 @@ else:
         step=10.0
     )
 
-    menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False)
+    # En single, on garde le mode simple visible (par défaut True)
+    menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False, show_simple_art34=True)
     answers.update(menage)
 
     st.divider()
