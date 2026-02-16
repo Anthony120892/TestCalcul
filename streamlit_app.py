@@ -1,22 +1,24 @@
 import json
 import os
 import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from io import BytesIO
 
 import streamlit as st
 
 # ============================================================
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
+# => On UTILISE les TAUX ANNUELS comme référence (centime près)
 # ============================================================
 DEFAULT_ENGINE = {
     "version": "1.4",
     "config": {
-        # ✅ Taux RIS ANNUELS (référence) — à privilégier pour tomber au centime
+        # Taux RIS ANNUELS (référence)  ✅
+        # (on dérive ensuite le mensuel = annuel/12 pour l'affichage)
         "ris_rates_annuel": {"cohab": 10513.60, "isole": 15770.41, "fam_charge": 21312.87},
 
-        # (Optionnel) affichage informatif du mensuel (dérivé)
-        "show_ris_monthly_info": True,
+        # (Optionnel) ancien champ laissé pour compat / info uniquement
+        "ris_rates": {"cohab": 876.13, "isole": 1314.20, "fam_charge": 1776.07},
 
         # Immunisation simple (annuelle)
         "immunisation_simple_annuelle": {"cohab": 155.0, "isole": 250.0, "fam_charge": 310.0},
@@ -96,23 +98,26 @@ def normalize_engine(raw: dict) -> dict:
         cfg["immo"]["bati_par_enfant"] = float(exo.get("bati_par_enfant", cfg["immo"]["bati_par_enfant"]))
         cfg["immo"]["non_bati_base"] = float(exo.get("non_bati_base", cfg["immo"]["non_bati_base"]))
 
-    # S'assurer que ris_rates_annuel existe
+    # Assurer presence/typage
     if "ris_rates_annuel" not in cfg:
-        cfg["ris_rates_annuel"] = {"cohab": 0.0, "isole": 0.0, "fam_charge": 0.0}
+        cfg["ris_rates_annuel"] = {"cohab": None, "isole": None, "fam_charge": None}
+
     for k in ("cohab", "isole", "fam_charge"):
-        cfg["ris_rates_annuel"][k] = float(cfg["ris_rates_annuel"].get(k, 0.0))
+        cfg["ris_rates"][k] = float(cfg["ris_rates"].get(k, 0.0))
         cfg["immunisation_simple_annuelle"][k] = float(cfg["immunisation_simple_annuelle"].get(k, 0.0))
+        if cfg["ris_rates_annuel"].get(k) is not None:
+            cfg["ris_rates_annuel"][k] = float(cfg["ris_rates_annuel"][k])
 
     if "art34" not in cfg:
         cfg["art34"] = {}
-    cfg["art34"]["taux_a_laisser_mensuel"] = float(cfg["art34"].get("taux_a_laisser_mensuel", 0.0))
+    cfg["art34"]["taux_a_laisser_mensuel"] = float(
+        cfg["art34"].get("taux_a_laisser_mensuel", cfg["ris_rates"].get("cohab", 0.0))
+    )
 
+    # PF indexables (valeur de référence)
     if "pf" not in cfg:
         cfg["pf"] = {"pf_mensuel_defaut": 0.0}
     cfg["pf"]["pf_mensuel_defaut"] = float(cfg["pf"].get("pf_mensuel_defaut", 0.0))
-
-    if "show_ris_monthly_info" not in cfg:
-        cfg["show_ris_monthly_info"] = True
 
     return engine
 
@@ -125,65 +130,39 @@ def load_engine() -> dict:
     return normalize_engine(DEFAULT_ENGINE)
 
 
-def parse_iso_date(x) -> date | None:
-    if x is None:
-        return None
+def month_prorata_from_request_date(d: date) -> dict:
+    days_in_month = calendar.monthrange(d.year, d.month)[1]
+    days_remaining_inclusive = days_in_month - d.day + 1
+    prorata = max(0.0, min(1.0, days_remaining_inclusive / days_in_month))
+    return {
+        "jours_dans_mois": int(days_in_month),
+        "jours_restants_inclus": int(days_remaining_inclusive),
+        "prorata": float(prorata),
+    }
+
+
+def end_of_month(d: date) -> date:
+    dim = calendar.monthrange(d.year, d.month)[1]
+    return date(d.year, d.month, dim)
+
+
+def next_day(d: date) -> date:
+    return d + timedelta(days=1)
+
+
+def date_in_same_month(d: date, ref: date) -> bool:
+    return d.year == ref.year and d.month == ref.month
+
+
+def safe_parse_date(x) -> date | None:
     if isinstance(x, date):
         return x
-    s = str(x).strip()
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s).date()
-    except Exception:
+    if isinstance(x, str) and x.strip():
         try:
-            return datetime.strptime(s, "%Y-%m-%d").date()
+            return date.fromisoformat(x.strip())
         except Exception:
             return None
-
-
-def month_info(d: date) -> dict:
-    dim = calendar.monthrange(d.year, d.month)[1]
-    month_start = date(d.year, d.month, 1)
-    month_end = date(d.year, d.month, dim)
-    return {"days_in_month": dim, "month_start": month_start, "month_end": month_end}
-
-
-def days_inclusive(a: date, b: date) -> int:
-    if b < a:
-        return 0
-    return (b - a).days + 1
-
-
-def presence_ratio_in_month(date_ref: date, date_sortie: date | None) -> float:
-    """
-    Ratio de présence dans le mois de date_ref, en tenant compte d'une sortie (incluse).
-    Ex: sortie le 20 => présent du 1 au 20 => 20/dim.
-    """
-    mi = month_info(date_ref)
-    if date_sortie is None:
-        return 1.0
-    if date_sortie < mi["month_start"]:
-        return 0.0
-    if date_sortie >= mi["month_end"]:
-        return 1.0
-    present_days = days_inclusive(mi["month_start"], date_sortie)
-    return clamp01(present_days / mi["days_in_month"])
-
-
-def present_at_date(date_ref: date, date_sortie: date | None) -> bool:
-    """Présent à la date_ref (sortie incluse => présent jusqu'au jour de sortie)."""
-    if date_sortie is None:
-        return True
-    return date_ref <= date_sortie
-
-
-def money_to_annual(amount: float, period: str) -> float:
-    a = max(0.0, float(amount))
-    p = (period or "annuel").strip().lower()
-    if p.startswith("mens"):
-        return a * 12.0
-    return a
+    return None
 
 
 # ============================================================
@@ -308,15 +287,12 @@ def cession_biens_annuelle(cessions: list,
 
 # ============================================================
 # REVENUS (exo socio-pro)
-# ✅ accepte montant mensuel OU annuel (converti en annuel)
+# On encode "montant_annuel" (même si l'utilisateur tape mensuel)
 # ============================================================
-def revenus_annuels_apres_exonerations(revenus: list, cfg_soc: dict) -> float:
+def revenus_annuels_apres_exonerations(revenus_annuels: list, cfg_soc: dict) -> float:
     total_m = 0.0
-    for r in revenus:
-        period = (r.get("periode") or "annuel").lower()
-        amount = float(r.get("montant", r.get("montant_annuel", 0.0)))
-        a = money_to_annual(amount, period)
-
+    for r in revenus_annuels:
+        a = max(0.0, float(r.get("montant_annuel", 0.0)))
         m = a / 12.0
         t = r.get("type", "standard")
         eligible = bool(r.get("eligible", True))
@@ -337,8 +313,8 @@ def revenus_annuels_apres_exonerations(revenus: list, cfg_soc: dict) -> float:
 
 
 # ============================================================
-# ART.34 — MODE SIMPLE
-# ✅ ajout date_sortie_menage + prorata si sortie dans le mois
+# ART.34 — MODE SIMPLE (+ date de départ cohabitant)
+# => si le partenaire quitte le ménage, on l'exclut après cette date.
 # ============================================================
 def normalize_art34_type(raw_type: str) -> str:
     t = (raw_type or "").strip().lower()
@@ -355,13 +331,20 @@ def normalize_art34_type(raw_type: str) -> str:
 ADMISSIBLES_ART34 = {"partenaire", "debiteur_direct_1", "debiteur_direct_2"}
 
 
+def cohabitant_is_active_asof(c: dict, as_of: date) -> bool:
+    # date_quitte_menage = dernier jour où il est dans le ménage
+    dquit = safe_parse_date(c.get("date_quitte_menage"))
+    if dquit is None:
+        return True
+    return as_of <= dquit
+
+
 def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          taux_a_laisser_mensuel: float,
                                          partage_active: bool,
                                          nb_demandeurs_a_partager: int,
-                                         date_ref_presence: date) -> dict:
+                                         as_of: date) -> dict:
     taux = max(0.0, float(taux_a_laisser_mensuel))
-    mi = month_info(date_ref_presence)
 
     revenus_debiteurs_m = 0.0
     nb_debiteurs = 0
@@ -372,26 +355,14 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
             continue
         if bool(c.get("exclure", False)):
             continue
-
-        d_out = parse_iso_date(c.get("date_sortie_menage"))
-
-        # absent à la date_ref => on l'ignore complètement (mois suivants après sortie)
-        if not present_at_date(date_ref_presence, d_out):
+        if not cohabitant_is_active_asof(c, as_of):
             continue
 
-        # revenu mensuel "théorique" du cohabitant
-        rev_period = (c.get("revenu_periode") or "annuel").lower()
-        rev_amount = float(c.get("revenu", c.get("revenu_net_annuel", 0.0)))
-        rev_ann = money_to_annual(rev_amount, rev_period)
-        rev_m = rev_ann / 12.0
+        revenu_ann = max(0.0, float(c.get("revenu_net_annuel", 0.0)))
+        revenu_m = revenu_ann / 12.0
 
-        # prorata dans le mois si sortie durant le mois de la date_ref
-        ratio = 1.0
-        if d_out is not None and mi["month_start"] <= d_out <= mi["month_end"]:
-            ratio = presence_ratio_in_month(date_ref_presence, d_out)
-
-        revenus_debiteurs_m += (rev_m * ratio)
-        nb_debiteurs += 1  # important : compté même si revenu=0
+        revenus_debiteurs_m += revenu_m
+        nb_debiteurs += 1  # IMPORTANT: même si revenu = 0
 
     part_m = max(0.0, revenus_debiteurs_m - (nb_debiteurs * taux))
 
@@ -415,33 +386,16 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
 
 # ============================================================
 # ART.34 — MENAGE AVANCE (pool + priorité 1er/2e degré + partage)
-# ✅ membres: revenu mensuel ou annuel + date_sortie_menage
+# + revenus membres encodables mensuel/annuel (stockés en annuel)
 # ============================================================
 def make_pool_key(ids: list) -> str:
     a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
     return f"ids[{a}]"
 
 
-def member_monthly_income(m: dict, date_ref_presence: date) -> float:
-    d_out = parse_iso_date(m.get("date_sortie_menage"))
-    if not present_at_date(date_ref_presence, d_out):
-        return 0.0
-
-    mi = month_info(date_ref_presence)
-    period = (m.get("revenu_periode") or "annuel").lower()
-    amount = float(m.get("revenu", m.get("revenu_net_annuel", 0.0)))
-    ann = money_to_annual(amount, period)
-    rev_m = ann / 12.0
-
-    if d_out is not None and mi["month_start"] <= d_out <= mi["month_end"]:
-        rev_m *= presence_ratio_in_month(date_ref_presence, d_out)
-
-    return max(0.0, float(rev_m))
-
-
-def art34_group_excess_m(debtors: list, taux: float, date_ref_presence: date, extra_income_m: float = 0.0) -> float:
+def art34_group_excess_m(debtors: list, taux: float, extra_income_m: float = 0.0) -> float:
     n = len(debtors)
-    s = sum(member_monthly_income(d, date_ref_presence) for d in debtors) + max(0.0, float(extra_income_m))
+    s = sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + max(0.0, float(extra_income_m))
     return r2(max(0.0, s - (n * float(taux))))
 
 
@@ -452,13 +406,12 @@ def art34_draw_from_pool(degree: int,
                          pools: dict,
                          share_plan: dict,
                          include_ris_m: float,
-                         include_ris_from: list,
-                         date_ref_presence: date) -> dict:
+                         include_ris_from: list) -> dict:
     ids = list(debtor_ids or [])
     debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
 
     key = make_pool_key(ids)
-    base = art34_group_excess_m(debtors, taux, date_ref_presence=date_ref_presence, extra_income_m=include_ris_m)
+    base = art34_group_excess_m(debtors, taux, extra_income_m=include_ris_m)
 
     if key not in pools:
         pools[key] = float(base)
@@ -476,7 +429,9 @@ def art34_draw_from_pool(degree: int,
         "key": key,
         "degree": degree,
         "nb_debiteurs": len(debtors),
-        "revenus_m_total_avec_injections": r2(sum(member_monthly_income(d, date_ref_presence) for d in debtors) + include_ris_m),
+        "revenus_m_total_avec_injections": r2(
+            sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + include_ris_m
+        ),
         "base_exces_m": float(base),
         "pris_en_compte_m": float(take),
         "reste_pool_m": float(pools[key]),
@@ -488,8 +443,7 @@ def compute_art34_menage_avance(dossier: dict,
                                taux: float,
                                pools: dict,
                                share_plan: dict,
-                               prior_results: list,
-                               date_ref_presence: date) -> dict:
+                               prior_results: list) -> dict:
     include_from = dossier.get("include_ris_from_dossiers", []) or []
     include_ris_m = 0.0
     for idx in include_from:
@@ -503,7 +457,7 @@ def compute_art34_menage_avance(dossier: dict,
     dbg1 = art34_draw_from_pool(
         degree=1, debtor_ids=deg1_ids, household=household, taux=taux,
         pools=pools, share_plan=share_plan, include_ris_m=include_ris_m,
-        include_ris_from=include_from, date_ref_presence=date_ref_presence
+        include_ris_from=include_from
     ) if len(deg1_ids) > 0 else None
 
     part_m = float(dbg1["pris_en_compte_m"]) if dbg1 else 0.0
@@ -514,7 +468,7 @@ def compute_art34_menage_avance(dossier: dict,
         dbg2 = art34_draw_from_pool(
             degree=2, debtor_ids=deg2_ids, household=household, taux=taux,
             pools=pools, share_plan=share_plan, include_ris_m=0.0,
-            include_ris_from=[], date_ref_presence=date_ref_presence
+            include_ris_from=[]
         )
         part_m = float(dbg2["pris_en_compte_m"])
         used_degree = 2 if part_m > 0 else 0
@@ -532,23 +486,32 @@ def compute_art34_menage_avance(dossier: dict,
 
 
 # ============================================================
-# CALCUL CORE (annuel -> mensuel)
+# CALCUL GLOBAL — OFFICIEL CPAS (ANNUEL puis /12)
+# + "as_of" pour gérer les cohabitants qui quittent le ménage
 # ============================================================
-def compute_officiel_cpas_core(answers: dict, engine: dict, date_ref_presence: date) -> dict:
+def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None = None) -> dict:
     cfg = engine["config"]
     cat = answers.get("categorie", "isole")
 
-    taux_ris_annuel = float(cfg["ris_rates_annuel"].get(cat, 0.0))
-    taux_ris_mensuel_derive = r2(taux_ris_annuel / 12.0) if taux_ris_annuel > 0 else 0.0
+    # TAUX ANNUEL (référence) -> centime près
+    taux_ris_annuel = float(cfg.get("ris_rates_annuel", {}).get(cat) or 0.0)
+    taux_ris_annuel = r2(taux_ris_annuel)
+    taux_ris_m = r2(taux_ris_annuel / 12.0) if taux_ris_annuel > 0 else 0.0
+
+    # as_of = date de référence pour savoir qui est encore dans le ménage
+    if as_of is None:
+        as_of = answers.get("date_demande", date.today())
+        if not isinstance(as_of, date):
+            as_of = date.today()
 
     # 1) Revenus demandeur (+ conjoint si couple-demandeur)
     revenus_demandeur_annuels = revenus_annuels_apres_exonerations(
-        answers.get("revenus_demandeur", []),
+        answers.get("revenus_demandeur_annuels", []),
         cfg["socio_prof"]
     )
     if bool(answers.get("couple_demandeur", False)):
         revenus_conjoint_annuels = revenus_annuels_apres_exonerations(
-            answers.get("revenus_conjoint", []),
+            answers.get("revenus_conjoint_annuels", []),
             cfg["socio_prof"]
         )
         revenus_demandeur_annuels += revenus_conjoint_annuels
@@ -586,13 +549,13 @@ def compute_officiel_cpas_core(answers: dict, engine: dict, date_ref_presence: d
     )
     ces_ann = r2(ces_ann)
 
-    # 5) Art.34 (simple) — dépend de date_ref_presence pour sorties
+    # 5) Art.34 (simple) — dépend de as_of
     art34 = cohabitants_art34_part_mensuelle_cpas(
         cohabitants=answers.get("cohabitants_art34", []),
         taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
         partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
         nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
-        date_ref_presence=date_ref_presence
+        as_of=as_of
     )
 
     # 5bis) PF (mensuel -> annuel)
@@ -622,14 +585,21 @@ def compute_officiel_cpas_core(answers: dict, engine: dict, date_ref_presence: d
         immu_ann = float(cfg["immunisation_simple_annuelle"].get(cat, 0.0))
     immu_ann = r2(immu_ann)
 
-    total_apres_annuel = r2(max(0.0, total_avant_annuel - immu_ann))
-    ris_annuel = r2(max(0.0, taux_ris_annuel - total_apres_annuel)) if taux_ris_annuel > 0 else 0.0
+    total_apres_annuel = max(0.0, total_avant_annuel - immu_ann)
+    total_apres_annuel = r2(total_apres_annuel)
+
+    ris_annuel = max(0.0, taux_ris_annuel - total_apres_annuel) if taux_ris_annuel > 0 else 0.0
+    ris_annuel = r2(ris_annuel)
     ris_mensuel = r2(ris_annuel / 12.0)
 
     return {
+        "mode_calcul": "OFFICIEL_CPAS_ANNUEL",
         "categorie": cat,
         "enfants_a_charge": int(answers.get("enfants_a_charge", 0)),
         "couple_demandeur": bool(answers.get("couple_demandeur", False)),
+
+        "partage_enfants_jeunes_actif": bool(answers.get("partage_enfants_jeunes_actif", False)),
+        "nb_enfants_jeunes_demandeurs": int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
 
         "revenus_demandeur_annuels": float(revenus_demandeur_annuels),
         "capitaux_mobiliers_annuels": float(cap_ann),
@@ -646,88 +616,90 @@ def compute_officiel_cpas_core(answers: dict, engine: dict, date_ref_presence: d
 
         "total_ressources_avant_immunisation_simple_annuel": float(total_avant_annuel),
         "taux_ris_annuel": float(taux_ris_annuel),
-        "taux_ris_mensuel_derive": float(taux_ris_mensuel_derive),
         "immunisation_simple_annuelle": float(immu_ann),
         "total_ressources_apres_immunisation_simple_annuel": float(total_apres_annuel),
         "ris_theorique_annuel": float(ris_annuel),
+
+        "taux_ris_mensuel_derive": float(taux_ris_m),
         "ris_theorique_mensuel": float(ris_mensuel),
+        "as_of": str(as_of),
     }
 
 
 # ============================================================
-# CALCUL GLOBAL — 1er mois segmenté + mois suivants "après sortie"
+# SEGMENTS CPAS DU 1ER MOIS (quand cohabitant quitte le ménage)
+# => on calcule un RI "mensuel" pour chaque situation, puis on prorate
 # ============================================================
-def compute_officiel_cpas_annuel(answers: dict, engine: dict) -> dict:
+def compute_first_month_segments(answers: dict, engine: dict) -> dict:
     d_dem = answers.get("date_demande", date.today())
-    mi = month_info(d_dem)
-    dim = mi["days_in_month"]
+    if not isinstance(d_dem, date):
+        d_dem = date.today()
 
-    # --- dates de sortie (dans le mois) pour segmentation CPAS
-    out_dates = []
-    for c in (answers.get("cohabitants_art34", []) or []):
-        d_out = parse_iso_date(c.get("date_sortie_menage"))
-        if d_out is None:
+    eom = end_of_month(d_dem)
+    days_in_month = calendar.monthrange(d_dem.year, d_dem.month)[1]
+
+    # Dates de rupture dans le mois (date_quitte_menage)
+    change_points = []
+    for c in answers.get("cohabitants_art34", []) or []:
+        dq = safe_parse_date(c.get("date_quitte_menage"))
+        if dq is None:
             continue
-        if mi["month_start"] <= d_out <= mi["month_end"]:
-            out_dates.append(d_out)
+        if date_in_same_month(dq, d_dem) and dq >= d_dem and dq < eom:
+            # changement effectif au lendemain
+            change_points.append(next_day(dq))
 
-    out_dates = sorted(set(out_dates))
+    change_points = sorted(set(change_points))
 
-    # --- Référence "mois suivants" : lendemain de la dernière sortie du mois, sinon jour demande
-    ref_mois_suivants = d_dem
-    if out_dates:
-        ref_mois_suivants = out_dates[-1] + timedelta(days=1)
-
-    # ✅ base "mois suivants"
-    base = compute_officiel_cpas_core(answers, engine, date_ref_presence=ref_mois_suivants)
-
-    # --- 1er mois : segments (de la demande à fin de mois), avec changement aux sorties
-    segment_starts = [d_dem]
-    for d_out in out_dates:
-        nxt = d_out + timedelta(days=1)
-        if d_dem <= nxt <= mi["month_end"]:
-            segment_starts.append(nxt)
-    segment_starts = sorted(set(segment_starts))
-
+    # bornes segments : start = date_demande, puis change_points, puis fin+1
+    boundaries = [d_dem] + change_points + [next_day(eom)]
     segments = []
-    total_1er_mois = 0.0
+    total_first_month = 0.0
 
-    for idx, s in enumerate(segment_starts):
-        e = (segment_starts[idx + 1] - timedelta(days=1)) if idx + 1 < len(segment_starts) else mi["month_end"]
-        if e < s:
+    for i in range(len(boundaries) - 1):
+        start = boundaries[i]
+        end_excl = boundaries[i + 1]
+        end = end_excl - timedelta(days=1)
+        if end < start:
             continue
-        days_seg = days_inclusive(s, e)
-        ratio = days_seg / dim
 
-        seg_res = compute_officiel_cpas_core(answers, engine, date_ref_presence=s)
-        seg_m = float(seg_res["ris_theorique_mensuel"])
-        seg_amt = r2(seg_m * ratio)
+        # nb jours segment (inclusif)
+        seg_days = (end - start).days + 1
+        prorata = seg_days / days_in_month
+
+        # as_of = n'importe quel jour du segment (le start suffit)
+        res_seg = compute_officiel_cpas_annuel(answers, engine, as_of=start)
+
+        ris_m = float(res_seg["ris_theorique_mensuel"])
+        amount = r2(ris_m * prorata)
+        total_first_month = r2(total_first_month + amount)
 
         segments.append({
-            "du": str(s),
-            "au": str(e),
-            "jours": int(days_seg),
-            "sur": int(dim),
-            "taux_mensuel": r2(seg_m),
-            "montant": float(seg_amt),
-            "ref_presence": str(s),
+            "du": str(start),
+            "au": str(end),
+            "jours": int(seg_days),
+            "prorata": float(prorata),
+            "ris_mensuel": r2(ris_m),
+            "montant_segment": float(amount),
+            "as_of": str(start)
         })
-        total_1er_mois += seg_amt
 
-    total_1er_mois = r2(total_1er_mois)
+    # "mois suivants" = situation après le dernier changement du mois
+    ref_mois_suivants = boundaries[-2] if len(boundaries) >= 2 else d_dem
+    res_suivants = compute_officiel_cpas_annuel(answers, engine, as_of=ref_mois_suivants)
 
-    # Pour compat/affichage
-    base["date_demande"] = str(d_dem)
-    base["ref_mois_suivants"] = str(ref_mois_suivants)
-    base["ris_premier_mois_prorata"] = float(total_1er_mois)
-    base["ris_mois_suivants"] = float(base["ris_theorique_mensuel"])
-    base["segments_premier_mois"] = segments
-
-    return base
+    return {
+        "date_demande": str(d_dem),
+        "jours_dans_mois": int(days_in_month),
+        "reference_mois_suivants": str(ref_mois_suivants),
+        "ris_mois_suivants": float(res_suivants["ris_theorique_mensuel"]),
+        "segments": segments,
+        "ris_1er_mois_total": float(total_first_month),
+        "detail_mois_suivants": res_suivants,
+    }
 
 
 # ============================================================
-# EXPORT PDF (texte simple)
+# EXPORT PDF
 # ============================================================
 def build_decision_text(dossier_label: str, res: dict) -> str:
     lines = []
@@ -735,7 +707,7 @@ def build_decision_text(dossier_label: str, res: dict) -> str:
     lines.append("")
     lines.append(f"Catégorie: {res['categorie']}")
     lines.append(f"Taux RIS annuel (référence): {res['taux_ris_annuel']:.2f} €")
-    lines.append(f"Taux RIS mensuel (dérivé): {res.get('taux_ris_mensuel_derive', 0.0):.2f} €")
+    lines.append(f"Taux RIS mensuel (dérivé): {res['taux_ris_mensuel_derive']:.2f} €")
     lines.append("")
     lines.append("Ressources (annuel):")
     lines.append(f"- Revenus demandeur: {res['revenus_demandeur_annuels']:.2f} €")
@@ -751,17 +723,9 @@ def build_decision_text(dossier_label: str, res: dict) -> str:
     lines.append(f"Total ressources après immunisation: {res['total_ressources_apres_immunisation_simple_annuel']:.2f} €")
     lines.append("")
     lines.append(f"RIS annuel: {res['ris_theorique_annuel']:.2f} €")
-    lines.append(f"RIS mensuel (mois suivants): {res['ris_mois_suivants']:.2f} €")
+    lines.append(f"RIS mensuel: {res['ris_theorique_mensuel']:.2f} €")
     lines.append("")
-    lines.append(f"Date demande: {res.get('date_demande')}")
-    lines.append(f"Référence mois suivants: {res.get('ref_mois_suivants')}")
-    lines.append("")
-    lines.append("Calcul 1er mois (SEGMENTS CPAS):")
-    for seg in (res.get("segments_premier_mois") or []):
-        lines.append(
-            f"- Du {seg['du']} au {seg['au']} : {seg['taux_mensuel']:.2f} €/mois x {seg['jours']}/{seg['sur']} = {seg['montant']:.2f} €"
-        )
-    lines.append(f"RIS 1er mois total: {res.get('ris_premier_mois_prorata', 0.0):.2f} €")
+    lines.append(f"As-of (référence ménage): {res.get('as_of','')}")
     return "\n".join(lines)
 
 
@@ -799,8 +763,8 @@ st.set_page_config(page_title="Calcul RIS (CPAS officiel)", layout="centered")
 if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
-st.title("Calcul RIS — Prototype (CPAS officiel)")
-st.caption("Taux RIS ANNUELS (référence) + 1er mois segmenté (sorties ménage) + revenus encodables mensuel/annuel.")
+st.title("Calcul RIS — Prototype (CPAS officiel : annuel → /12 + segments)")
+st.caption("Taux RIS ANNUELS (référence centime près). Revenus encodables mensuel OU annuel. Gestion départ cohabitant (segments CPAS).")
 
 engine = load_engine()
 cfg = engine["config"]
@@ -808,12 +772,15 @@ cfg = engine["config"]
 with st.sidebar:
     st.subheader("Paramètres (JSON / indexables)")
 
-    st.write("**Taux RIS (ANNUELS — référence)**")
-    cfg["ris_rates_annuel"]["cohab"] = st.number_input("RIS cohab (€/an)", min_value=0.0, value=float(cfg["ris_rates_annuel"]["cohab"]), format="%.2f")
-    cfg["ris_rates_annuel"]["isole"] = st.number_input("RIS isolé (€/an)", min_value=0.0, value=float(cfg["ris_rates_annuel"]["isole"]), format="%.2f")
-    cfg["ris_rates_annuel"]["fam_charge"] = st.number_input("RIS fam. charge (€/an)", min_value=0.0, value=float(cfg["ris_rates_annuel"]["fam_charge"]), format="%.2f")
+    st.write("**Taux RIS ANNUELS (référence)** ✅")
+    cfg["ris_rates_annuel"]["cohab"] = st.number_input("RIS cohab (€/an)", min_value=0.0, value=float(cfg["ris_rates_annuel"].get("cohab") or 0.0), format="%.2f")
+    cfg["ris_rates_annuel"]["isole"] = st.number_input("RIS isolé (€/an)", min_value=0.0, value=float(cfg["ris_rates_annuel"].get("isole") or 0.0), format="%.2f")
+    cfg["ris_rates_annuel"]["fam_charge"] = st.number_input("RIS fam. charge (€/an)", min_value=0.0, value=float(cfg["ris_rates_annuel"].get("fam_charge") or 0.0), format="%.2f")
 
-    cfg["show_ris_monthly_info"] = st.checkbox("Afficher le mensuel dérivé (info)", value=bool(cfg.get("show_ris_monthly_info", True)))
+    st.caption("Info: mensuel dérivé = annuel / 12")
+    st.write(f"- cohab: {r2(cfg['ris_rates_annuel']['cohab']/12.0):.2f} €/mois")
+    st.write(f"- isolé: {r2(cfg['ris_rates_annuel']['isole']/12.0):.2f} €/mois")
+    st.write(f"- fam_charge: {r2(cfg['ris_rates_annuel']['fam_charge']/12.0):.2f} €/mois")
 
     st.divider()
     st.write("**Art.34 : taux cat.1 à laisser (€/mois)**")
@@ -846,24 +813,35 @@ with st.sidebar:
 
 
 # ---------------------------
-# Blocs UI
+# UI Helpers
 # ---------------------------
+def ui_money_period_input(label: str, key_prefix: str, default: float = 0.0, step: float = 100.0) -> tuple[float, str]:
+    """
+    Retourne (montant_annuel, period_label)
+    """
+    c1, c2 = st.columns([1.2, 1])
+    period = c1.selectbox("Période", ["Annuel (€/an)", "Mensuel (€/mois)"], key=f"{key_prefix}_period")
+    if period.startswith("Annuel"):
+        v = c2.number_input(label, min_value=0.0, value=float(default), step=float(step), key=f"{key_prefix}_val_a")
+        return float(v), "annuel"
+    else:
+        v = c2.number_input(label, min_value=0.0, value=float(default), step=float(step/12.0 if step else 10.0), key=f"{key_prefix}_val_m")
+        return float(v) * 12.0, "mensuel"
+
+
 def ui_revenus_block(prefix: str) -> list:
     lst = []
     nb = st.number_input(f"Nombre de revenus à encoder ({prefix})", min_value=0, value=1, step=1, key=f"{prefix}_nb")
     for i in range(int(nb)):
         st.markdown(f"**Revenu {i+1} ({prefix})**")
-        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        c1, c2, c3 = st.columns([2, 1, 1])
+
         label = c1.text_input("Type/label", value="salaire/chômage", key=f"{prefix}_lab_{i}")
 
-        periode = c2.selectbox("Période", ["annuel", "mensuel"], key=f"{prefix}_per_{i}")
-        montant = c3.number_input(
-            "Montant net (€)",
-            min_value=0.0, value=0.0, step=100.0,
-            key=f"{prefix}_amt_{i}"
-        )
+        # Montant annuel OU mensuel -> stocké en annuel
+        montant_annuel, _p = ui_money_period_input("Montant net", key_prefix=f"{prefix}_money_{i}", default=0.0, step=100.0)
 
-        typ = c4.selectbox(
+        typ = c3.selectbox(
             "Règle",
             ["standard", "socio_prof", "etudiant", "artistique_irregulier", "ale", "prestations_familiales"],
             key=f"{prefix}_t_{i}"
@@ -878,8 +856,7 @@ def ui_revenus_block(prefix: str) -> list:
 
         lst.append({
             "label": label,
-            "periode": periode,
-            "montant": float(montant),
+            "montant_annuel": float(montant_annuel),
             "type": typ,
             "eligible": eligible,
             "ale_part_excedentaire_mensuel": float(ale_part_exc_m)
@@ -907,44 +884,46 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool) -> 
         )
 
     st.markdown("### Cohabitants admissibles (art.34) — mode simple")
-    st.caption("✅ Ajout: date de sortie du ménage (prorata dans le 1er mois + absent pour les mois suivants).")
-    nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=1, step=1, key=f"{prefix}_nbcoh")
+    st.caption("NOUVEAU : tu peux encoder la date de départ du ménage. Après cette date, la personne ne compte plus.")
+    nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nbcoh")
 
     cohabitants = []
     pf_links = []
 
     for i in range(int(nb_coh)):
         st.markdown(f"**Cohabitant {i+1}**")
-        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        c1, c2, c3 = st.columns([2, 1, 1])
         typ = c1.selectbox(
             "Type",
             ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
             key=f"{prefix}_coh_t_{i}"
         )
-        rev_per = c2.selectbox("Période", ["annuel", "mensuel"], key=f"{prefix}_coh_per_{i}")
-        rev = c3.number_input("Revenu net (€)", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_coh_r_{i}")
-        excl = c4.checkbox("Exclure (équité)", value=False, key=f"{prefix}_coh_x_{i}")
 
-        d_out = st.date_input(
-            "Date de sortie du ménage (optionnel)",
+        # Revenus encodables mensuel/annuel -> stockés en annuel
+        rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"{prefix}_coh_rev_{i}", default=0.0, step=100.0)
+
+        excl = c3.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
+
+        # Date de départ (optionnel) : dernier jour ensemble
+        dq = st.date_input(
+            "Date de départ du ménage (optionnel) — dernier jour ensemble",
             value=None,
-            key=f"{prefix}_coh_out_{i}"
+            key=f"{prefix}_coh_dq_{i}"
         )
 
         if enable_pf_links:
-            c5, c6, c7 = st.columns([1.2, 1, 1])
-            has_pf = c5.checkbox("PF perçues ?", value=False, key=f"{prefix}_coh_pf_yes_{i}")
+            c4, c5, c6 = st.columns([1.2, 1, 1])
+            has_pf = c4.checkbox("PF perçues ?", value=False, key=f"{prefix}_coh_pf_yes_{i}")
             if has_pf:
-                pf_m = c6.number_input("PF (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"{prefix}_coh_pf_m_{i}")
-                dem_idx = c7.number_input("Pour demandeur #", min_value=1, max_value=nb_demandeurs, value=1, step=1, key=f"{prefix}_coh_pf_dem_{i}")
+                pf_m = c5.number_input("PF (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"{prefix}_coh_pf_m_{i}")
+                dem_idx = c6.number_input("Pour demandeur #", min_value=1, max_value=nb_demandeurs, value=1, step=1, key=f"{prefix}_coh_pf_dem_{i}")
                 pf_links.append({"dem_index": int(dem_idx) - 1, "pf_mensuel": float(pf_m)})
 
         cohabitants.append({
             "type": typ,
-            "revenu_periode": rev_per,
-            "revenu": float(rev),
+            "revenu_net_annuel": float(rev_annuel),
             "exclure": bool(excl),
-            "date_sortie_menage": str(d_out) if d_out else ""
+            "date_quitte_menage": str(dq) if isinstance(dq, date) else None
         })
 
     answers["cohabitants_art34"] = cohabitants
@@ -1055,9 +1034,11 @@ if multi_mode:
         value=True
     )
 
-    nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=2, step=1)
+    nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
 
-    # A) dossiers
+    # -----------------------
+    # A) Encodage des dossiers
+    # -----------------------
     st.subheader("A) Dossiers / demandes")
     dossiers = []
     for i in range(int(nb_dem)):
@@ -1069,15 +1050,16 @@ if multi_mode:
 
         is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
 
-        st.markdown("**Revenus (demandeur 1) — mensuel OU annuel**")
+        st.markdown("**Revenus nets (demandeur 1)**")
         rev1 = ui_revenus_block(f"hd_rev1_{i}")
 
         rev2 = []
         if is_couple:
-            st.markdown("**Revenus (demandeur 2 / conjoint) — mensuel OU annuel**")
+            st.markdown("**Revenus nets (demandeur 2 / conjoint)**")
             rev2 = ui_revenus_block(f"hd_rev2_{i}")
 
         st.markdown("**PF à compter (spécifiques à CE dossier)**")
+        st.caption("Astuce : si tu encodes les PF comme revenu (type 'prestations_familiales'), laisse ce champ à 0 pour éviter un double comptage.")
         pf_m = st.number_input(
             "PF à compter (€/mois)",
             min_value=0.0,
@@ -1099,8 +1081,8 @@ if multi_mode:
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
             "couple_demandeur": bool(is_couple),
-            "revenus_demandeur": rev1,
-            "revenus_conjoint": rev2,
+            "revenus_demandeur_annuels": rev1,
+            "revenus_conjoint_annuels": rev2,
             "prestations_familiales_a_compter_mensuel": float(pf_m),
             "share_art34": bool(share_art34),
             "art34_deg1_ids": [],
@@ -1108,47 +1090,53 @@ if multi_mode:
             "include_ris_from_dossiers": [],
         })
 
-    # B) ménage commun (inclut cohabitants + sortie)
+    # -----------------------
+    # B) Ménage commun (capitaux/immo/cession/avantage + PF links)
+    # -----------------------
     st.subheader("B) Ménage (commun)")
     menage_common = ui_menage_common("hd_menage", nb_demandeurs=int(nb_dem), enable_pf_links=True)
 
+    # Inject PF-links vers le bon dossier
     for link in menage_common.get("pf_links", []):
         idx = int(link["dem_index"])
         if 0 <= idx < len(dossiers):
             dossiers[idx]["prestations_familiales_a_compter_mensuel"] += float(link["pf_mensuel"])
 
-    # C) ménage avancé (membres)
+    # -----------------------
+    # C) Ménage avancé: membres + mapping des débiteurs par degré
+    # (revenus membres encodables mensuel OU annuel)
+    # -----------------------
     household = {"members": [], "members_by_id": {}}
 
     if advanced_household:
         st.divider()
         st.subheader("C) Ménage avancé — Membres & débiteurs (art.34)")
-        st.caption("✅ Revenus encodables mensuel/annuel + date sortie ménage par membre.")
-        nb_m = st.number_input("Nombre de membres (débit. potentiels) à encoder", min_value=0, value=2, step=1)
+        st.caption("NOUVEAU : revenus des membres encodables mensuel OU annuel.")
+
+        nb_m = st.number_input("Nombre de membres (débit. potentiels) à encoder", min_value=0, value=3, step=1)
         members = []
         for j in range(int(nb_m)):
             st.markdown(f"**Membre {j+1}**")
-            c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+            c1, c2, c3 = st.columns([2, 1, 1])
             mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
             name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
-            rev_per = c2.selectbox("Période", ["annuel", "mensuel"], key=f"mem_per_{j}")
-            rev = c3.number_input("Revenu net (€)", min_value=0.0, value=0.0, step=100.0, key=f"mem_rev_{j}")
-            excl = c4.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
-            d_out = st.date_input("Date sortie ménage (optionnel)", value=None, key=f"mem_out_{j}")
 
+            # mensuel/annuel -> stocké en annuel
+            rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"mem_rev_{j}", default=0.0, step=100.0)
+
+            excl = c3.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
             m = {
                 "id": str(mid).strip(),
                 "name": str(name).strip(),
-                "revenu_periode": rev_per,
-                "revenu": float(rev),
-                "exclure": bool(excl),
-                "date_sortie_menage": str(d_out) if d_out else ""
+                "revenu_net_annuel": float(rev_annuel),
+                "exclure": bool(excl)
             }
             if m["id"]:
                 members.append(m)
 
         members_by_id = {m["id"]: m for m in members if not m.get("exclure", False)}
         household = {"members": members, "members_by_id": members_by_id}
+
         ids_available = list(members_by_id.keys())
 
         st.divider()
@@ -1168,6 +1156,7 @@ if multi_mode:
                 default=[],
                 key=f"d_{d['idx']}_deg2"
             )
+
             d["include_ris_from_dossiers"] = st.multiselect(
                 "Option : ajouter le RI mensuel d’autres dossiers dans les revenus des débiteurs 1er degré (cas E11 : +RI parents)",
                 options=[i for i in range(len(dossiers))],
@@ -1182,6 +1171,7 @@ if multi_mode:
 
         # plan de partage (cas E6)
         share_plan = {}
+
         if advanced_household:
             for d in dossiers:
                 if not d.get("share_art34", False):
@@ -1194,14 +1184,14 @@ if multi_mode:
                     share_plan[key] = {"count": 0, "per": 0.0}
                 share_plan[key]["count"] += 1
 
-            # base pool calculée avec photo au jour demande (approx); l'itération corrige ensuite via injections
             for key, v in list(share_plan.items()):
-                ids_str = key.replace("ids[", "").replace("]", "")
-                ids = [x for x in ids_str.split(",") if x]
+                try:
+                    ids_str = key.replace("ids[", "").replace("]", "")
+                    ids = [x for x in ids_str.split(",") if x]
+                except Exception:
+                    ids = []
                 debtors = [household["members_by_id"][i] for i in ids if i in household["members_by_id"]]
-                # on prend la date de demande du 1er dossier comme référence pool
-                ref0 = dossiers[0]["date_demande"]
-                base = art34_group_excess_m(debtors, taux_art34, date_ref_presence=ref0, extra_income_m=0.0)
+                base = art34_group_excess_m(debtors, taux_art34, extra_income_m=0.0)
                 if v["count"] > 0:
                     v["per"] = r2(float(base) / float(v["count"]))
 
@@ -1218,39 +1208,33 @@ if multi_mode:
                     "enfants_a_charge": d["enfants_a_charge"],
                     "date_demande": d["date_demande"],
                     "couple_demandeur": d["couple_demandeur"],
-                    "revenus_demandeur": d["revenus_demandeur"],
-                    "revenus_conjoint": d["revenus_conjoint"],
+                    "revenus_demandeur_annuels": d["revenus_demandeur_annuels"],
+                    "revenus_conjoint_annuels": d["revenus_conjoint_annuels"],
                     "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
                 })
 
                 if advanced_household:
-                    # Pour l'art.34 avancé, on utilise la référence "mois suivants" calculée à partir des sorties du ménage commun
-                    res_core = compute_officiel_cpas_annuel(answers, engine)
-                    ref_mois_suiv = parse_iso_date(res_core.get("ref_mois_suivants")) or d["date_demande"]
-
                     art34_adv = compute_art34_menage_avance(
                         dossier=d,
                         household=household,
                         taux=taux_art34,
                         pools=pools,
                         share_plan=share_plan,
-                        prior_results=prior_results,
-                        date_ref_presence=ref_mois_suiv
+                        prior_results=prior_results
                     )
 
-                    # Recalcule core avec art.34 remplacé (mensuel/annuel)
-                    # (on remplace simplement les champs calculés)
-                    res = res_core
+                    res = compute_officiel_cpas_annuel(answers, engine)
+
                     res["art34_mode"] = art34_adv["art34_mode"]
                     res["art34_degree_utilise"] = art34_adv["art34_degree_utilise"]
                     res["ris_injecte_mensuel"] = art34_adv["ris_injecte_mensuel"]
                     res["debug_art34_deg1"] = art34_adv["debug_deg1"]
                     res["debug_art34_deg2"] = art34_adv["debug_deg2"]
+
                     res["cohabitants_part_a_compter_mensuel"] = art34_adv["cohabitants_part_a_compter_mensuel"]
                     res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
 
-                    # Recalcule les totaux/RI sur base de ce art34 avancé (mêmes formules core)
-                    taux_ris_annuel = float(res["taux_ris_annuel"])
+                    # Recalc totals (avec art34 avancé)
                     total_avant = (
                         float(res["revenus_demandeur_annuels"])
                         + float(res["capitaux_mobiliers_annuels"])
@@ -1262,6 +1246,7 @@ if multi_mode:
                     )
                     total_avant = r2(total_avant)
 
+                    taux_ris_annuel = float(res["taux_ris_annuel"])
                     immu = 0.0
                     if taux_ris_annuel > 0 and total_avant < taux_ris_annuel:
                         immu = float(cfg["immunisation_simple_annuelle"].get(res["categorie"], 0.0))
@@ -1276,7 +1261,6 @@ if multi_mode:
                     res["total_ressources_apres_immunisation_simple_annuel"] = float(total_apres)
                     res["ris_theorique_annuel"] = float(ris_ann)
                     res["ris_theorique_mensuel"] = float(ris_m)
-                    res["ris_mois_suivants"] = float(ris_m)
 
                 else:
                     res = compute_officiel_cpas_annuel(answers, engine)
@@ -1297,6 +1281,7 @@ if multi_mode:
                 break
 
         results = prior_results
+
         st.success("Calcul terminé ✅")
 
         st.markdown("## Tableau comparatif")
@@ -1306,8 +1291,7 @@ if multi_mode:
                 "Dossier": r["_label"],
                 "Catégorie": r["categorie"],
                 "Couple ?": "Oui" if r.get("couple_demandeur") else "Non",
-                "RIS mois suivants": round(r.get("ris_mois_suivants", r["ris_theorique_mensuel"]), 2),
-                "RIS 1er mois": round(r.get("ris_premier_mois_prorata", 0.0), 2),
+                "RIS mensuel": round(r["ris_theorique_mensuel"], 2),
                 "Art.34 mensuel compté": round(r["cohabitants_part_a_compter_mensuel"], 2),
                 "PF mensuel compté": round(r["prestations_familiales_a_compter_mensuel"], 2),
                 "Total ressources (annuel)": round(r["total_ressources_avant_immunisation_simple_annuel"], 2),
@@ -1324,10 +1308,7 @@ if multi_mode:
         st.markdown("## Détails (par dossier)")
         for r in results:
             with st.expander(f"Détail — {r['_label']}"):
-                st.metric("RIS mois suivants (€/mois)", f"{r.get('ris_mois_suivants', r['ris_theorique_mensuel']):.2f} €")
-                st.metric("RIS du 1er mois (segments)", f"{r.get('ris_premier_mois_prorata', 0.0):.2f} €")
-                st.write("Segments 1er mois :", r.get("segments_premier_mois", []))
-
+                st.metric("RIS mensuel", f"{r['ris_theorique_mensuel']:.2f} €")
                 if advanced_household:
                     st.caption("Art.34 avancé :")
                     st.write({
@@ -1360,6 +1341,7 @@ if multi_mode:
                 else:
                     st.info("PDF indisponible ici (reportlab non installé). Ajoute `reportlab` dans requirements.txt.")
 
+
 # ------------------------------------------------------------
 # MODE 1 DEMANDEUR
 # ------------------------------------------------------------
@@ -1371,21 +1353,21 @@ else:
     answers["enfants_a_charge"] = st.number_input("Enfants à charge", min_value=0, value=0, step=1)
 
     st.divider()
-    st.subheader("Date de la demande (pour calcul du 1er mois)")
+    st.subheader("Date de la demande (segments CPAS)")
     answers["date_demande"] = st.date_input("Date de la demande", value=date.today())
 
     st.divider()
-    st.subheader("1) Revenus du demandeur — mensuel OU annuel")
+    st.subheader("1) Revenus du demandeur — encodage mensuel OU annuel")
     answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE (2 demandeurs ensemble)", value=False)
 
     st.markdown("**Demandeur 1**")
-    answers["revenus_demandeur"] = ui_revenus_block("dem")
+    answers["revenus_demandeur_annuels"] = ui_revenus_block("dem")
 
-    answers["revenus_conjoint"] = []
+    answers["revenus_conjoint_annuels"] = []
     if answers["couple_demandeur"]:
         st.divider()
         st.markdown("**Demandeur 2 (conjoint/partenaire) — revenus à additionner**")
-        answers["revenus_conjoint"] = ui_revenus_block("conj")
+        answers["revenus_conjoint_annuels"] = ui_revenus_block("conj")
 
     st.divider()
     st.subheader("PF à compter (spécifiques au demandeur)")
@@ -1397,44 +1379,48 @@ else:
         step=10.0
     )
 
+    # ménage commun (inclut cohabitants art34 avec date de départ)
     menage = ui_menage_common("single_menage", nb_demandeurs=1, enable_pf_links=False)
     answers.update(menage)
 
     st.divider()
     if st.button("Calculer le RIS"):
-        res = compute_officiel_cpas_annuel(answers, engine)
+        # 1) Segments du 1er mois (si départ cohabitant)
+        seg = compute_first_month_segments(answers, engine)
+
+        # 2) Résultat "mois suivants" = situation après le dernier changement dans le mois
+        res_suiv = seg["detail_mois_suivants"]
+
         st.success("Calcul terminé ✅")
 
-        if bool(cfg.get("show_ris_monthly_info", True)):
-            st.caption(f"Taux mensuel dérivé (info) : {res.get('taux_ris_mensuel_derive', 0.0):.2f} €")
-
-        st.metric("RIS mois suivants (€/mois)", f"{res['ris_mois_suivants']:.2f}")
-        st.metric("RIS du 1er mois (segments CPAS)", f"{res['ris_premier_mois_prorata']:.2f}")
+        st.metric("RIS mois suivants (€/mois)", f"{seg['ris_mois_suivants']:.2f}")
+        st.metric("RIS du 1er mois (segments CPAS)", f"{seg['ris_1er_mois_total']:.2f}")
 
         st.markdown("### Détail segments du 1er mois")
-        for seg in res.get("segments_premier_mois", []):
-            st.write(
-                f"• Du {seg['du']} au {seg['au']} : {seg['taux_mensuel']:.2f} €/mois × {seg['jours']}/{seg['sur']} = {seg['montant']:.2f} €"
-            )
+        for s in seg["segments"]:
+            st.write(f"- Du {s['du']} au {s['au']} : {s['ris_mensuel']:.2f} €/mois × {s['jours']}/{seg['jours_dans_mois']} = {s['montant_segment']:.2f} €")
 
-        st.caption(f"Référence mois suivants : {res.get('ref_mois_suivants')}")
+        st.caption(f"Date demande: {seg['date_demande']} | Référence mois suivants: {seg['reference_mois_suivants']}")
 
-        st.write("### Détail (CPAS officiel — annuel -> mensuel)")
-        st.json(res)
+        st.divider()
+        st.write("### Détail (mois suivants — CPAS officiel annuel puis mensuel)")
+        st.json(res_suiv)
 
-        decision_txt = build_decision_text("Demandeur", res)
+        decision_txt = build_decision_text("Demandeur", res_suiv)
         st.download_button(
-            "⬇️ Export TEXTE décision",
+            "⬇️ Export TEXTE décision (mois suivants)",
             data=decision_txt.encode("utf-8"),
-            file_name="decision_RIS.txt",
+            file_name="decision_RIS_mois_suivants.txt",
             mime="text/plain"
         )
+
+        # Export PDF (mois suivants)
         pdf_buf = try_make_pdf_from_text(decision_txt)
         if pdf_buf is not None:
             st.download_button(
-                "⬇️ Export PDF décision",
+                "⬇️ Export PDF décision (mois suivants)",
                 data=pdf_buf,
-                file_name="decision_RIS.pdf",
+                file_name="decision_RIS_mois_suivants.pdf",
                 mime="application/pdf"
             )
         else:
