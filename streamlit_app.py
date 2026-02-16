@@ -413,7 +413,7 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         "cohabitants_part_a_compter_mensuel": float(total_cohabitants_m),
         "cohabitants_part_a_compter_annuel": float(r2(total_cohabitants_m * 12.0)),
     }
-==========================
+#==========================
 def make_pool_key(ids: list) -> str:
     a = ",".join(sorted([str(x) for x in (ids or []) if str(x).strip()]))
     return f"ids[{a}]"
