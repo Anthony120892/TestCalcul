@@ -1244,17 +1244,17 @@ def make_decision_pdf_cpas(
         ]
         story.append(bullets(lines))
 
-        seuils = det.get("seuils", {}) or {}
-        rows = [
-            ["Seuil / taux", "Valeur"],
-            ["t0_max (seuil exonéré)", f"{euro(seuils.get('t0_max',0))} €"],
-            ["t1_min", f"{euro(seuils.get('t1_min',0))} €"],
-            ["t1_max", f"{euro(seuils.get('t1_max',0))} €"],
-            ["t1_rate", f"{seuils.get('t1_rate',0):.2f}"],
-            ["t2_rate", f"{seuils.get('t2_rate',0):.2f}"],
-        ]
-        story.append(money_table(rows, col_widths=[8.2*cm, 8.0*cm]))
-        story.append(Spacer(1, 4))
+        #seuils = det.get("seuils", {}) or {}
+       # rows = [
+         #   ["Seuil / taux", "Valeur"],
+          #  ["t0_max (seuil exonéré)", f"{euro(seuils.get('t0_max',0))} €"],
+           # ["t1_min", f"{euro(seuils.get('t1_min',0))} €"],
+            #["t1_max", f"{euro(seuils.get('t1_max',0))} €"],
+           # ["t1_rate", f"{seuils.get('t1_rate',0):.2f}"],
+           # ["t2_rate", f"{seuils.get('t2_rate',0):.2f}"],
+       # ]
+      #  story.append(money_table(rows, col_widths=[8.2*cm, 8.0*cm]))
+      #  story.append(Spacer(1, 4))
 
         tr = det.get("tranches", []) or []
         rows2 = [["Tranche", "Base", "Taux", "Calcul", "Produit"]]
