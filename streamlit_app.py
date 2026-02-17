@@ -994,7 +994,7 @@ def make_decision_pdf_cpas(
     # Header
     logo_elem = None
     if logo_path and os.path.exists(logo_path):
-        logo_elem = Image(logo_path, width=3.0*cm, height=3.5*cm)
+        logo_elem = Image(logo_path, width=4.0*cm, height=3.5*cm)
 
     demandeur_nom = _safe(answers_snapshot.get("demandeur_nom", "")) or _safe(res_mois_suivants.get("demandeur_nom", ""))
 
