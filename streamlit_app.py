@@ -10,7 +10,7 @@ import streamlit as st
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
 # ============================================================
 DEFAULT_ENGINE = {
-    "version": "1.5",
+    "version": "1.6",  # ✅ bump interne (sans casser le reste)
     "config": {
         # Taux RIS ANNUELS (référence) ✅
         "ris_rates_annuel": {"cohab": 10513.60, "isole": 15770.41, "fam_charge": 21312.87},
@@ -161,7 +161,81 @@ def safe_parse_date(x) -> date | None:
 
 # ============================================================
 # CAPITAUX MOBILIERS (annuel)
+#   ✅ Ajout: détail par tranches (pour PDF)
 # ============================================================
+def capital_mobilier_calc(total_capital: float,
+                          compte_commun: bool,
+                          nb_titulaires: int,
+                          categorie: str,
+                          conjoint_compte_commun: bool,
+                          part_fraction_custom: float,
+                          cfg_cap: dict) -> dict:
+    total_capital = max(0.0, float(total_capital))
+
+    # fraction attribuée au ménage demandeur
+    if compte_commun:
+        nb = max(1, int(nb_titulaires))
+        numerator = 2 if (categorie == "fam_charge" and conjoint_compte_commun) else 1
+        fraction = numerator / nb
+        fraction_mode = f"compte commun: {numerator}/{nb}"
+    else:
+        fraction = clamp01(part_fraction_custom)
+        fraction_mode = f"fraction custom: {fraction:.2f}"
+
+    adj_total = total_capital * fraction
+
+    # seuils ajustés à la fraction (comme ton code d’origine)
+    t0_max = float(cfg_cap["t0_max"]) * fraction
+    t1_min = float(cfg_cap["t1_min"]) * fraction
+    t1_max = float(cfg_cap["t1_max"]) * fraction
+    r1_ = float(cfg_cap["t1_rate"])
+    r2_ = float(cfg_cap["t2_rate"])
+
+    # calcul + détail
+    tranche1_base = max(0.0, min(adj_total, t1_max) - t1_min)
+    tranche2_base = max(0.0, adj_total - t1_max)
+
+    tranche1_calc = tranche1_base * r1_
+    tranche2_calc = tranche2_base * r2_
+
+    annuel = 0.0
+    if adj_total <= t0_max:
+        annuel = 0.0
+    else:
+        annuel = tranche1_calc + tranche2_calc
+
+    return {
+        "total_capital": r2(total_capital),
+        "fraction": r2(fraction),
+        "fraction_mode": fraction_mode,
+        "capital_pris_en_compte_base": r2(adj_total),
+        "seuils": {
+            "t0_max": r2(t0_max),
+            "t1_min": r2(t1_min),
+            "t1_max": r2(t1_max),
+            "t1_rate": r2(r1_),
+            "t2_rate": r2(r2_),
+        },
+        "tranches": [
+            {
+                "label": "Tranche 1",
+                "base": r2(tranche1_base),
+                "taux": r2(r1_),
+                "produit": r2(tranche1_calc),
+                "borne": f"]{r2(t1_min)} ; {r2(t1_max)}]"
+            },
+            {
+                "label": "Tranche 2",
+                "base": r2(tranche2_base),
+                "taux": r2(r2_),
+                "produit": r2(tranche2_calc),
+                "borne": f">{r2(t1_max)}"
+            }
+        ],
+        "annuel": r2(max(0.0, annuel))
+    }
+
+
 def capital_mobilier_annuel(total_capital: float,
                             compte_commun: bool,
                             nb_titulaires: int,
@@ -169,38 +243,23 @@ def capital_mobilier_annuel(total_capital: float,
                             conjoint_compte_commun: bool,
                             part_fraction_custom: float,
                             cfg_cap: dict) -> float:
-    total_capital = max(0.0, float(total_capital))
-
-    if compte_commun:
-        nb = max(1, int(nb_titulaires))
-        numerator = 2 if (categorie == "fam_charge" and conjoint_compte_commun) else 1
-        fraction = numerator / nb
-    else:
-        fraction = clamp01(part_fraction_custom)
-
-    adj_total = total_capital * fraction
-
-    t0_max = float(cfg_cap["t0_max"]) * fraction
-    t1_min = float(cfg_cap["t1_min"]) * fraction
-    t1_max = float(cfg_cap["t1_max"]) * fraction
-    r1_ = float(cfg_cap["t1_rate"])
-    r2_ = float(cfg_cap["t2_rate"])
-
-    if adj_total <= t0_max:
-        return 0.0
-
-    annuel = 0.0
-    tranche1 = max(0.0, min(adj_total, t1_max) - t1_min)
-    annuel += tranche1 * r1_
-    tranche2 = max(0.0, adj_total - t1_max)
-    annuel += tranche2 * r2_
-    return float(max(0.0, annuel))
+    # ✅ compat: on garde la signature et le retour float
+    return float(capital_mobilier_calc(
+        total_capital=total_capital,
+        compte_commun=compte_commun,
+        nb_titulaires=nb_titulaires,
+        categorie=categorie,
+        conjoint_compte_commun=conjoint_compte_commun,
+        part_fraction_custom=part_fraction_custom,
+        cfg_cap=cfg_cap
+    )["annuel"])
 
 
 # ============================================================
 # IMMOBILIER (annuel)
+#   ✅ Ajout: détail par bien (RC, exonérations, coeff, déductions)
 # ============================================================
-def immo_annuel_total(biens: list, enfants: int, cfg_immo: dict) -> float:
+def immo_calc_total(biens: list, enfants: int, cfg_immo: dict) -> dict:
     biens_countes = [b for b in biens if not b.get("habitation_principale", False)]
     nb_bati = sum(1 for b in biens_countes if b.get("bati", True))
     nb_non_bati = sum(1 for b in biens_countes if not b.get("bati", True))
@@ -209,9 +268,10 @@ def immo_annuel_total(biens: list, enfants: int, cfg_immo: dict) -> float:
     exo_non_bati_total = float(cfg_immo["non_bati_base"])
     coeff = float(cfg_immo.get("coeff_rc", 3.0))
 
+    details = []
     total_annuel = 0.0
 
-    for b in biens_countes:
+    for idx, b in enumerate(biens_countes, start=1):
         bati = bool(b.get("bati", True))
         rc = max(0.0, float(b.get("rc_non_indexe", 0.0)))
         frac = clamp01(b.get("fraction_droits", 1.0))
@@ -219,27 +279,140 @@ def immo_annuel_total(biens: list, enfants: int, cfg_immo: dict) -> float:
 
         if bati:
             exo_par_bien = (exo_bati_total * frac) / nb_bati if nb_bati > 0 else 0.0
+            typ = "Bâti"
         else:
             exo_par_bien = (exo_non_bati_total * frac) / nb_non_bati if nb_non_bati > 0 else 0.0
+            typ = "Non bâti"
 
-        base = max(0.0, (rc_part - exo_par_bien) * coeff)
+        base_rc = max(0.0, rc_part - exo_par_bien)
+        base_coeff = base_rc * coeff
+
+        # déductions éventuelles
+        ded_interets = 0.0
+        ded_rente = 0.0
 
         if b.get("hypotheque", False):
             interets = max(0.0, float(b.get("interets_annuels", 0.0))) * frac
-            base -= min(interets, 0.5 * base)
+            ded_interets = min(interets, 0.5 * base_coeff)
+            base_coeff -= ded_interets
 
         if b.get("viager", False):
             rente = max(0.0, float(b.get("rente_viagere_annuelle", 0.0))) * frac
-            base -= min(rente, 0.5 * base)
+            ded_rente = min(rente, 0.5 * base_coeff)
+            base_coeff -= ded_rente
 
-        total_annuel += max(0.0, base)
+        pris = max(0.0, base_coeff)
+        total_annuel += pris
 
-    return float(max(0.0, total_annuel))
+        details.append({
+            "bien": idx,
+            "type": typ,
+            "rc_non_indexe": r2(rc),
+            "fraction": r2(frac),
+            "rc_part": r2(rc_part),
+            "exo_par_bien": r2(exo_par_bien),
+            "rc_apres_exo": r2(base_rc),
+            "coeff_rc": r2(coeff),
+            "base_coeff": r2(base_rc * coeff),
+            "ded_interets": r2(ded_interets),
+            "ded_rente": r2(ded_rente),
+            "pris_en_compte": r2(pris),
+        })
+
+    return {
+        "total_annuel": r2(max(0.0, total_annuel)),
+        "coeff_rc": r2(coeff),
+        "exo_bati_total": r2(exo_bati_total),
+        "exo_non_bati_total": r2(exo_non_bati_total),
+        "nb_bati": int(nb_bati),
+        "nb_non_bati": int(nb_non_bati),
+        "details": details,
+    }
+
+
+def immo_annuel_total(biens: list, enfants: int, cfg_immo: dict) -> float:
+    # ✅ compat: garder retour float
+    return float(immo_calc_total(biens, enfants, cfg_immo)["total_annuel"])
 
 
 # ============================================================
 # CESSION DE BIENS (annuel)
+#   ✅ Ajout: détail "type capitaux" (utile pour PDF aussi)
 # ============================================================
+def cession_biens_calc(cessions: list,
+                       cas_particulier_tranche_37200: bool,
+                       dettes_deductibles: float,
+                       abatt_cat: str,
+                       abatt_mois_prorata: int,
+                       cfg_cession: dict,
+                       cfg_cap: dict) -> dict:
+    brut = 0.0
+    details_cess = []
+    for i, c in enumerate(cessions or [], start=1):
+        v = max(0.0, float(c.get("valeur_venale", 0.0)))
+        v0 = v
+        if c.get("usufruit", False):
+            v = v * float(cfg_cession["usufruit_ratio"])
+        brut += v
+        details_cess.append({
+            "cession": i,
+            "valeur_venale": r2(v0),
+            "usufruit": bool(c.get("usufruit", False)),
+            "ratio_usufruit": r2(float(cfg_cession["usufruit_ratio"])),
+            "valeur_retendue": r2(v),
+        })
+
+    dettes = max(0.0, float(dettes_deductibles))
+    apres_dettes = max(0.0, brut - dettes)
+
+    tranche_immunisee = float(cfg_cession["tranche_immunisee"]) if cas_particulier_tranche_37200 else 0.0
+    apres_tranche = max(0.0, apres_dettes - tranche_immunisee)
+
+    abatt_annuel = float(cfg_cession["abattements_annuels"].get(abatt_cat, 0.0))
+    mois = max(0, min(12, int(abatt_mois_prorata)))
+    abatt_prorata = abatt_annuel * (mois / 12.0)
+    base_cap = max(0.0, apres_tranche - abatt_prorata)
+
+    # barème capitaux (non fractionné ici)
+    t0_max = float(cfg_cap["t0_max"])
+    t1_min = float(cfg_cap["t1_min"])
+    t1_max = float(cfg_cap["t1_max"])
+    r1_ = float(cfg_cap["t1_rate"])
+    r2_ = float(cfg_cap["t2_rate"])
+
+    tranche1_base = max(0.0, min(base_cap, t1_max) - t1_min)
+    tranche2_base = max(0.0, base_cap - t1_max)
+    tranche1_calc = tranche1_base * r1_
+    tranche2_calc = tranche2_base * r2_
+
+    annuel = 0.0
+    if base_cap <= t0_max:
+        annuel = 0.0
+    else:
+        annuel = tranche1_calc + tranche2_calc
+
+    return {
+        "brut_total": r2(brut),
+        "details_cessions": details_cess,
+        "dettes_deductibles": r2(dettes),
+        "apres_dettes": r2(apres_dettes),
+        "cas_tranche_37200": bool(cas_particulier_tranche_37200),
+        "tranche_37200": r2(tranche_immunisee),
+        "apres_tranche_37200": r2(apres_tranche),
+        "abatt_cat": abatt_cat,
+        "abatt_annuel": r2(abatt_annuel),
+        "abatt_mois": int(mois),
+        "abatt_prorata": r2(abatt_prorata),
+        "base_cap": r2(base_cap),
+        "seuils": {"t0_max": r2(t0_max), "t1_min": r2(t1_min), "t1_max": r2(t1_max), "t1_rate": r2(r1_), "t2_rate": r2(r2_)},
+        "tranches": [
+            {"label": "Tranche 1", "base": r2(tranche1_base), "taux": r2(r1_), "produit": r2(tranche1_calc), "borne": f"]{r2(t1_min)} ; {r2(t1_max)}]"},
+            {"label": "Tranche 2", "base": r2(tranche2_base), "taux": r2(r2_), "produit": r2(tranche2_calc), "borne": f">{r2(t1_max)}"},
+        ],
+        "annuel": r2(max(0.0, annuel)),
+    }
+
+
 def cession_biens_annuelle(cessions: list,
                            cas_particulier_tranche_37200: bool,
                            dettes_deductibles: float,
@@ -247,36 +420,16 @@ def cession_biens_annuelle(cessions: list,
                            abatt_mois_prorata: int,
                            cfg_cession: dict,
                            cfg_cap: dict) -> float:
-    total = 0.0
-    for c in cessions:
-        v = max(0.0, float(c.get("valeur_venale", 0.0)))
-        if c.get("usufruit", False):
-            v *= float(cfg_cession["usufruit_ratio"])
-        total += v
-
-    total = max(0.0, total - max(0.0, float(dettes_deductibles)))
-    if cas_particulier_tranche_37200:
-        total = max(0.0, total - float(cfg_cession["tranche_immunisee"]))
-
-    abatt_annuel = float(cfg_cession["abattements_annuels"].get(abatt_cat, 0.0))
-    mois = max(0, min(12, int(abatt_mois_prorata)))
-    total = max(0.0, total - (abatt_annuel * (mois / 12.0)))
-
-    t0_max = float(cfg_cap["t0_max"])
-    t1_min = float(cfg_cap["t1_min"])
-    t1_max = float(cfg_cap["t1_max"])
-    r1_ = float(cfg_cap["t1_rate"])
-    r2_ = float(cfg_cap["t2_rate"])
-
-    if total <= t0_max:
-        return 0.0
-
-    annuel = 0.0
-    tranche1 = max(0.0, min(total, t1_max) - t1_min)
-    annuel += tranche1 * r1_
-    tranche2 = max(0.0, total - t1_max)
-    annuel += tranche2 * r2_
-    return float(max(0.0, annuel))
+    # ✅ compat: garder retour float
+    return float(cession_biens_calc(
+        cessions=cessions,
+        cas_particulier_tranche_37200=cas_particulier_tranche_37200,
+        dettes_deductibles=dettes_deductibles,
+        abatt_cat=abatt_cat,
+        abatt_mois_prorata=abatt_mois_prorata,
+        cfg_cession=cfg_cession,
+        cfg_cap=cfg_cap
+    )["annuel"])
 
 
 # ============================================================
@@ -358,7 +511,6 @@ def cohabitant_is_active_asof(c: dict, as_of: date) -> bool:
 
 
 def _coh_display_name(c: dict) -> str:
-    # ✅ Nouveau: nom optionnel (sinon on garde "débit./partenaire" etc.)
     n = (c.get("name") or c.get("nom") or c.get("label") or "").strip()
     return n
 
@@ -369,11 +521,9 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          nb_demandeurs_a_partager: int,
                                          as_of: date) -> dict:
     """
-    ✅ MODIF DEMANDÉE:
-    - Déduction du taux (876,13€) appliquée séparément à CHAQUE débiteur:
+    ✅ Déduction du taux (876,13€) appliquée séparément à CHAQUE débiteur:
         excedent_i = max(0, revenu_i_m - taux)
       puis total = somme(excedent_i)
-    - Les détails retournés permettent d’afficher le calcul par cohabitant dans le PDF.
     """
     taux = max(0.0, float(taux_a_laisser_mensuel))
 
@@ -383,7 +533,6 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
     revenus_debiteurs_m_brut = 0.0
     nb_debiteurs = 0
 
-    # Nouveau: somme des excédents après déduction par personne
     debiteurs_excedents_m_total = 0.0
 
     detail_partenaire = []
@@ -415,7 +564,7 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
             revenus_debiteurs_m_brut += revenu_m
             nb_debiteurs += 1
 
-            excedent_m = max(0.0, revenu_m - taux)  # ✅ déduction par personne
+            excedent_m = max(0.0, revenu_m - taux)
             debiteurs_excedents_m_total += excedent_m
 
             detail_debiteurs.append({
@@ -441,11 +590,9 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         "cohabitants_n_partenaire_pris_en_compte": int(nb_partenaire),
         "cohabitants_n_debiteurs_pris_en_compte": int(nb_debiteurs),
 
-        # brut (utile pour transparence)
         "revenus_partenaire_mensuels_total": r2(revenus_partenaire_m),
         "revenus_debiteurs_mensuels_total": r2(revenus_debiteurs_m_brut),
 
-        # ✅ renommage logique: avant partage = somme des excédents après déduction individuelle
         "cohabitants_part_debiteurs_avant_partage_mensuel": r2(debiteurs_excedents_m_total),
         "cohabitants_part_debiteurs_apres_partage_mensuel": r2(part_debiteurs_m_par_dem),
 
@@ -563,6 +710,7 @@ def compute_art34_menage_avance(dossier: dict,
 
 # ============================================================
 # CALCUL GLOBAL — OFFICIEL CPAS (ANNUEL puis /12)
+#   ✅ Ajout: totaux demandeur vs cohabitants + détails (capitaux/immo/cession)
 # ============================================================
 def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None = None) -> dict:
     cfg = engine["config"]
@@ -576,11 +724,13 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         if not isinstance(as_of, date):
             as_of = date.today()
 
+    # --- Revenus demandeur (+ conjoint si couple)
     revenus_demandeur_annuels = revenus_annuels_apres_exonerations(
         answers.get("revenus_demandeur_annuels", []),
         cfg["socio_prof"],
         cfg["ale"]
     )
+    revenus_conjoint_annuels = 0.0
     if bool(answers.get("couple_demandeur", False)):
         revenus_conjoint_annuels = revenus_annuels_apres_exonerations(
             answers.get("revenus_conjoint_annuels", []),
@@ -589,8 +739,10 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         )
         revenus_demandeur_annuels += revenus_conjoint_annuels
     revenus_demandeur_annuels = r2(revenus_demandeur_annuels)
+    revenus_conjoint_annuels = r2(revenus_conjoint_annuels)
 
-    cap_ann = r2(capital_mobilier_annuel(
+    # --- Capitaux (avec détails)
+    cap_detail = capital_mobilier_calc(
         total_capital=answers.get("capital_mobilier_total", 0.0),
         compte_commun=answers.get("capital_compte_commun", False),
         nb_titulaires=answers.get("capital_nb_titulaires", 1),
@@ -598,15 +750,19 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         conjoint_compte_commun=answers.get("capital_conjoint_cotitulaire", False),
         part_fraction_custom=answers.get("capital_fraction", 1.0),
         cfg_cap=cfg["capital_mobilier"]
-    ))
+    )
+    cap_ann = r2(cap_detail["annuel"])
 
-    immo_ann = r2(immo_annuel_total(
+    # --- Immo (avec détails)
+    immo_detail = immo_calc_total(
         biens=answers.get("biens_immobiliers", []),
         enfants=answers.get("enfants_a_charge", 0),
         cfg_immo=cfg["immo"]
-    ))
+    )
+    immo_ann = r2(immo_detail["total_annuel"])
 
-    ces_ann = r2(cession_biens_annuelle(
+    # --- Cession (avec détails)
+    ces_detail = cession_biens_calc(
         cessions=answers.get("cessions", []),
         cas_particulier_tranche_37200=answers.get("cession_cas_particulier_37200", False),
         dettes_deductibles=answers.get("cession_dettes_deductibles", 0.0),
@@ -614,8 +770,10 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         abatt_mois_prorata=answers.get("cession_abatt_mois", 0),
         cfg_cession=cfg["cession"],
         cfg_cap=cfg["capital_mobilier"]
-    ))
+    )
+    ces_ann = r2(ces_detail["annuel"])
 
+    # --- Cohabitants (art.34 simple)
     art34 = cohabitants_art34_part_mensuelle_cpas(
         cohabitants=answers.get("cohabitants_art34", []),
         taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
@@ -624,21 +782,25 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         as_of=as_of
     )
 
+    # --- PF + avantage nature
     pf_m = r2(max(0.0, float(answers.get("prestations_familiales_a_compter_mensuel", 0.0))))
     pf_ann = r2(pf_m * 12.0)
 
     avantage_nature_m = r2(max(0.0, float(answers.get("avantage_nature_logement_mensuel", 0.0))))
     avantage_nature_ann = r2(avantage_nature_m * 12.0)
 
-    total_avant_annuel = r2(
+    # ✅ Totaux séparés demandeur vs cohabitants
+    total_demandeur_avant_annuel = r2(
         revenus_demandeur_annuels
         + cap_ann
         + immo_ann
         + ces_ann
-        + art34["cohabitants_part_a_compter_annuel"]
         + pf_ann
         + avantage_nature_ann
     )
+    total_cohabitants_annuel = r2(float(art34["cohabitants_part_a_compter_annuel"]))
+
+    total_avant_annuel = r2(total_demandeur_avant_annuel + total_cohabitants_annuel)
 
     immu_ann = 0.0
     if taux_ris_annuel > 0 and total_avant_annuel < taux_ris_annuel:
@@ -656,13 +818,21 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
         "enfants_a_charge": int(answers.get("enfants_a_charge", 0)),
         "couple_demandeur": bool(answers.get("couple_demandeur", False)),
 
+        "demandeur_nom": str(answers.get("demandeur_nom", "") or "").strip(),  # ✅ pour PDF
         "partage_enfants_jeunes_actif": bool(answers.get("partage_enfants_jeunes_actif", False)),
         "nb_enfants_jeunes_demandeurs": int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
 
         "revenus_demandeur_annuels": float(revenus_demandeur_annuels),
+        "revenus_conjoint_annuels": float(revenus_conjoint_annuels),
+
         "capitaux_mobiliers_annuels": float(cap_ann),
+        "capitaux_mobiliers_detail": cap_detail,  # ✅ détail tranches
+
         "immo_annuels": float(immo_ann),
+        "immo_detail": immo_detail,  # ✅ détail cadastre / RC / exonérations / coeff
+
         "cession_biens_annuelle": float(ces_ann),
+        "cession_detail": ces_detail,  # ✅ détail
 
         **art34,
 
@@ -671,6 +841,10 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None
 
         "avantage_nature_logement_mensuel": float(avantage_nature_m),
         "avantage_nature_logement_annuel": float(avantage_nature_ann),
+
+        # ✅ synthèses séparées
+        "total_ressources_demandeur_avant_immunisation_annuel": float(total_demandeur_avant_annuel),
+        "total_ressources_cohabitants_annuel": float(total_cohabitants_annuel),
 
         "total_ressources_avant_immunisation_simple_annuel": float(total_avant_annuel),
         "taux_ris_annuel": float(taux_ris_annuel),
@@ -751,8 +925,11 @@ def compute_first_month_segments(answers: dict, engine: dict) -> dict:
 
 # ============================================================
 # PDF — VERSION "CPAS"
-#   ✅ Correction chevauchement: cellules en Paragraph + wordwrap
-#   ✅ Détail Art.34 par cohabitant (déduction individuelle)
+#   ✅ Ajouts demandés:
+#     - Nom du demandeur dans le PDF
+#     - Rubriques: ressources propres (demandeur) + ressources cohabitants (par cohabitant)
+#     - Synthèse: demandeur + cohabitants + total, puis immunisation
+#     - Détails capitaux (tranches) + immobilier (par bien) + cession (par tranches aussi)
 # ============================================================
 def euro(x: float) -> str:
     x = float(x or 0.0)
@@ -805,7 +982,6 @@ def make_decision_pdf_cpas(
 
     styles = getSampleStyleSheet()
     base = ParagraphStyle("base", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=13)
-    # ✅ Styles anti-chevauchement (tables)
     cell = ParagraphStyle("cell", parent=base, fontSize=9.0, leading=11)
     cell_small = ParagraphStyle("cell_small", parent=base, fontSize=8.6, leading=10.6)
     small = ParagraphStyle("small", parent=base, fontSize=9, leading=12, textColor=colors.grey)
@@ -820,10 +996,15 @@ def make_decision_pdf_cpas(
     if logo_path and os.path.exists(logo_path):
         logo_elem = Image(logo_path, width=3.0*cm, height=3.0*cm)
 
+    demandeur_nom = _safe(answers_snapshot.get("demandeur_nom", "")) or _safe(res_mois_suivants.get("demandeur_nom", ""))
+
     header_data = [
-        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul RIS", h1)],
+        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul du RI", h1)],
         ["", Paragraph(f"Dossier : <b>{_safe(dossier_label)}</b>", base)],
     ]
+    if demandeur_nom:
+        header_data.append(["", Paragraph(f"Demandeur : <b>{demandeur_nom}</b>", base)])
+
     header_tbl = Table(header_data, colWidths=[3.2*cm, 13.0*cm])
     header_tbl.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -848,16 +1029,10 @@ def make_decision_pdf_cpas(
     story.append(Spacer(1, 10))
 
     def bullets(lines: list[str]):
-        # ✅ Wrap propre: chaque item est un Paragraph
         items = [ListItem(Paragraph(l, base), leftIndent=12) for l in lines]
         return ListFlowable(items, bulletType="bullet", start="•", leftIndent=14)
 
     def money_table(rows: list[list[str]], col_widths=None):
-        """
-        ✅ Fix chevauchement:
-        - on convertit toutes les cellules en Paragraph -> retour à la ligne automatique
-        - repeatRows=1 pour répéter l’en-tête si ça passe sur plusieurs pages
-        """
         if not rows:
             return Paragraph("", base)
 
@@ -866,7 +1041,6 @@ def make_decision_pdf_cpas(
             row_conv = []
             for cidx, v in enumerate(r):
                 txt = "" if v is None else str(v)
-                # en-tête légèrement plus lisible
                 stl = cell if ridx == 0 else cell_small
                 row_conv.append(Paragraph(txt.replace("\n", "<br/>"), stl))
             conv.append(row_conv)
@@ -907,7 +1081,6 @@ def make_decision_pdf_cpas(
                 return f"{typ} : non éligible → montant compté = {euro(a)} €/an"
             ded = min(float(cfg_soc.get("max_mensuel", 0.0)), m)
             compt_m = max(0.0, m - ded)
-            # ✅ explicite la déduction appliquée
             return (
                 f"{typ} : {euro(m)} €/mois − déduction {euro(ded)} €/mois "
                 f"(max {euro(cfg_soc.get('max_mensuel',0))} €/mois) = {euro(compt_m)} €/mois (×12)"
@@ -926,11 +1099,11 @@ def make_decision_pdf_cpas(
 
         return f"standard : {euro(a)} €/an (soit {euro(m)} €/mois)"
 
-    def render_revenus_block(title: str, revenus_list: list):
+    def render_revenus_block(title: str, revenus_list: list) -> float:
         story.append(Paragraph(title, h3))
         if not revenus_list:
             story.append(Paragraph("Aucun revenu encodé.", base))
-            return
+            return 0.0
 
         rows = [["Type/label", "Règle", "Calcul (détail)", "Montant compté (annuel)"]]
         total_ann = 0.0
@@ -939,7 +1112,6 @@ def make_decision_pdf_cpas(
             label = _safe(r.get("label", ""))
             typ = _safe(r.get("type", "standard"))
 
-            # Reconstituer le montant "compté annuel"
             if typ == "ale" and "nb_cheques_mois" in r:
                 nb = float(r.get("nb_cheques_mois", 0.0))
                 _brut_m, _exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
@@ -983,6 +1155,7 @@ def make_decision_pdf_cpas(
             f"<font size=9 color='grey'>Total revenus comptés (annuel) pour ce bloc : {euro(total_ann)} €</font>",
             small
         ))
+        return float(r2(total_ann))
 
     def _coh_label_pdf(c: dict) -> str:
         typ = normalize_art34_type(c.get("type", "autre"))
@@ -1026,7 +1199,6 @@ def make_decision_pdf_cpas(
         if part_m <= 0:
             lines.append("Pas de ressource cohabitant prise en compte pour la période.")
         else:
-            # Partenaires
             if partn_m > 0 and (detail_part or partn_m > 0):
                 if detail_part:
                     for p in detail_part:
@@ -1035,7 +1207,6 @@ def make_decision_pdf_cpas(
                         lines.append(f"{who} : {euro(float(p.get('mensuel',0)))} €/mois")
                 lines.append(f"Total partenaire(s) : {euro(partn_m)} € (mensuel)")
 
-            # ✅ Débiteurs: détail par personne, puis total
             if n_debt > 0:
                 lines.append(f"Débiteurs (déduction {euro(taux)} €/mois appliquée individuellement) :")
                 if detail_deb:
@@ -1047,7 +1218,6 @@ def make_decision_pdf_cpas(
                         ex = float(d.get("excedent_mensuel_apres_deduction", 0.0))
                         lines.append(f"— {who} : {euro(rm)} − {euro(taux)} = {euro(ex)} €/mois")
                 else:
-                    # fallback si pas de détails (devrait rarement arriver)
                     lines.append(f"Brut débiteurs : {euro(debt_m_tot_brut)} €/mois (total)")
 
                 lines.append(f"Total débiteurs après déduction : {euro(debt_av)} € (mensuel)")
@@ -1059,14 +1229,137 @@ def make_decision_pdf_cpas(
 
         story.append(bullets(lines))
 
+    def render_capitaux_detail(res_seg: dict):
+        det = res_seg.get("capitaux_mobiliers_detail") or {}
+        annuel = float(res_seg.get("capitaux_mobiliers_annuels", 0.0))
+        if annuel <= 0 and float(det.get("total_capital", 0.0)) <= 0:
+            story.append(Paragraph("Capitaux mobiliers : aucun.", base))
+            return
+
+        story.append(Paragraph("Capitaux mobiliers — détail :", h3))
+        lines = [
+            f"Total capitaux encodés : {euro(det.get('total_capital',0))} €",
+            f"Fraction appliquée : {euro(det.get('fraction',0))} ({_safe(det.get('fraction_mode',''))})",
+            f"Capital pris en compte (base) : {euro(det.get('capital_pris_en_compte_base',0))} €",
+        ]
+        story.append(bullets(lines))
+
+        seuils = det.get("seuils", {}) or {}
+        rows = [
+            ["Seuil / taux", "Valeur"],
+            ["t0_max (seuil exonéré)", f"{euro(seuils.get('t0_max',0))} €"],
+            ["t1_min", f"{euro(seuils.get('t1_min',0))} €"],
+            ["t1_max", f"{euro(seuils.get('t1_max',0))} €"],
+            ["t1_rate", f"{seuils.get('t1_rate',0):.2f}"],
+            ["t2_rate", f"{seuils.get('t2_rate',0):.2f}"],
+        ]
+        story.append(money_table(rows, col_widths=[8.2*cm, 8.0*cm]))
+        story.append(Spacer(1, 4))
+
+        tr = det.get("tranches", []) or []
+        rows2 = [["Tranche", "Base", "Taux", "Calcul", "Produit"]]
+        for t in tr:
+            rows2.append([
+                _safe(t.get("borne", t.get("label", ""))),
+                f"{euro(t.get('base',0))} €",
+                f"{float(t.get('taux',0))*100:.2f} %",
+                f"{euro(t.get('base',0))} × {float(t.get('taux',0))*100:.2f} %",
+                f"{euro(t.get('produit',0))} €",
+            ])
+        story.append(money_table(rows2, col_widths=[4.0*cm, 3.0*cm, 2.2*cm, 4.7*cm, 2.9*cm]))
+        story.append(Paragraph(f"<font size=9 color='grey'>Total capitaux à compter (annuel) : {euro(annuel)} €</font>", small))
+
+    def render_immo_detail(res_seg: dict):
+        det = res_seg.get("immo_detail") or {}
+        total = float(res_seg.get("immo_annuels", 0.0))
+        if total <= 0 and not (det.get("details") or []):
+            story.append(Paragraph("Immobilier : aucun.", base))
+            return
+
+        story.append(Paragraph("Immobilier (RC) — détail :", h3))
+        lines = [
+            f"Coefficient RC : {euro(det.get('coeff_rc',0))}",
+            f"Exonération bâti totale : {euro(det.get('exo_bati_total',0))} € (répartie sur {int(det.get('nb_bati',0))} bien(s) bâti(s))",
+            f"Exonération non bâti totale : {euro(det.get('exo_non_bati_total',0))} € (répartie sur {int(det.get('nb_non_bati',0))} bien(s) non bâti(s))",
+        ]
+        story.append(bullets(lines))
+
+        rows = [["Bien", "Type", "RC", "Frac.", "RC part", "Exo", "RC-Exo", "×coeff", "Déduc.", "Pris en compte"]]
+        for d in (det.get("details") or []):
+            ded = float(d.get("ded_interets", 0.0)) + float(d.get("ded_rente", 0.0))
+            rows.append([
+                str(d.get("bien", "")),
+                _safe(d.get("type", "")),
+                f"{euro(d.get('rc_non_indexe',0))}",
+                f"{float(d.get('fraction',0)):.2f}",
+                f"{euro(d.get('rc_part',0))}",
+                f"{euro(d.get('exo_par_bien',0))}",
+                f"{euro(d.get('rc_apres_exo',0))}",
+                f"{euro(d.get('base_coeff',0))}",
+                f"{euro(ded)}",
+                f"{euro(d.get('pris_en_compte',0))}",
+            ])
+        story.append(money_table(rows, col_widths=[1.1*cm, 1.8*cm, 1.7*cm, 1.1*cm, 1.7*cm, 1.4*cm, 1.6*cm, 1.4*cm, 1.3*cm, 2.0*cm]))
+        story.append(Paragraph(f"<font size=9 color='grey'>Total immobilier à compter (annuel) : {euro(total)} €</font>", small))
+
+    def render_cession_detail(res_seg: dict):
+        det = res_seg.get("cession_detail") or {}
+        total = float(res_seg.get("cession_biens_annuelle", 0.0))
+        if total <= 0 and not (det.get("details_cessions") or []):
+            story.append(Paragraph("Cession de biens : aucune.", base))
+            return
+
+        story.append(Paragraph("Cession de biens — détail :", h3))
+
+        # détail des cessions
+        rows = [["Cession", "Valeur vénale", "Usufruit ?", "Ratio", "Valeur retenue"]]
+        for c in (det.get("details_cessions") or []):
+            rows.append([
+                str(c.get("cession", "")),
+                f"{euro(c.get('valeur_venale',0))} €",
+                "Oui" if c.get("usufruit") else "Non",
+                f"{float(c.get('ratio_usufruit',0)):.2f}",
+                f"{euro(c.get('valeur_retendue',0))} €",
+            ])
+        story.append(money_table(rows, col_widths=[1.5*cm, 3.2*cm, 2.1*cm, 2.0*cm, 6.8*cm]))
+        story.append(Spacer(1, 4))
+
+        # étapes
+        lines = [
+            f"Brut retenu : {euro(det.get('brut_total',0))} €",
+            f"Dettes déductibles : {euro(det.get('dettes_deductibles',0))} € → après dettes : {euro(det.get('apres_dettes',0))} €",
+        ]
+        if det.get("cas_tranche_37200"):
+            lines.append(f"Tranche immunisée (cas particulier) : {euro(det.get('tranche_37200',0))} € → après tranche : {euro(det.get('apres_tranche_37200',0))} €")
+        lines.append(f"Abattement {det.get('abatt_cat','')} : {euro(det.get('abatt_annuel',0))} €/an, prorata {int(det.get('abatt_mois',0))}/12 = {euro(det.get('abatt_prorata',0))} €")
+        lines.append(f"Base capitaux : {euro(det.get('base_cap',0))} €")
+        story.append(bullets(lines))
+
+        tr = det.get("tranches", []) or []
+        rows2 = [["Tranche", "Base", "Taux", "Calcul", "Produit"]]
+        for t in tr:
+            rows2.append([
+                _safe(t.get("borne", t.get("label", ""))),
+                f"{euro(t.get('base',0))} €",
+                f"{float(t.get('taux',0))*100:.2f} %",
+                f"{euro(t.get('base',0))} × {float(t.get('taux',0))*100:.2f} %",
+                f"{euro(t.get('produit',0))} €",
+            ])
+        story.append(money_table(rows2, col_widths=[4.0*cm, 3.0*cm, 2.2*cm, 4.7*cm, 2.9*cm]))
+        story.append(Paragraph(f"<font size=9 color='grey'>Total cession à compter (annuel) : {euro(total)} €</font>", small))
+
     def render_totaux_block(res_seg: dict):
+        total_dem = float(res_seg.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
+        total_coh = float(res_seg.get("total_ressources_cohabitants_annuel", 0.0))
         total_av = float(res_seg.get("total_ressources_avant_immunisation_simple_annuel", 0.0))
         immu = float(res_seg.get("immunisation_simple_annuelle", 0.0))
         total_ap = float(res_seg.get("total_ressources_apres_immunisation_simple_annuel", 0.0))
 
         rows = [
             ["Synthèse ressources", ""],
-            ["Total ressources avant immunisation", f"{euro(total_av)} €"],
+            ["Total ressources demandeur (propres)", f"{euro(total_dem)} €"],
+            ["Total ressources cohabitants (art.34)", f"{euro(total_coh)} €"],
+            ["Total ressources avant immunisation (addition)", f"{euro(total_av)} €"],
             ["Immunisation simple", f"{euro(immu)} €"],
             ["Total ressources après immunisation", f"{euro(total_ap)} €"],
         ]
@@ -1102,32 +1395,40 @@ def make_decision_pdf_cpas(
 
         story.append(Paragraph("Ressources à considérer <font size=9>(ne pas oublier de déduire l’immunisation forfaitaire)</font> :", h2))
 
-        story.append(Paragraph("Ressources propres :", h3))
-        render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
-        if bool(answers_snapshot.get("couple_demandeur", False)):
-            render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
+        # ✅ Ressources propres du demandeur (propres)
+        story.append(Paragraph("Ressources du demandeur (propres) :", h3))
 
-        cap_total = float(res_seg.get("capitaux_mobiliers_annuels", 0.0))
-        immo_total = float(res_seg.get("immo_annuels", 0.0))
-        ces_total = float(res_seg.get("cession_biens_annuelle", 0.0))
+        tot_rev_dem = render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
+        tot_rev_conj = 0.0
+        if bool(answers_snapshot.get("couple_demandeur", False)):
+            tot_rev_conj = render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
+
+        story.append(Spacer(1, 4))
+        render_capitaux_detail(res_seg)
+        story.append(Spacer(1, 4))
+        render_immo_detail(res_seg)
+        story.append(Spacer(1, 4))
+        render_cession_detail(res_seg)
+
         pf_ann = float(res_seg.get("prestations_familiales_a_compter_annuel", 0.0))
         avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
-
+        story.append(Spacer(1, 4))
         story.append(bullets([
-            f"Capitaux mobiliers : {euro(cap_total)} € (annuel)",
-            f"Immobilier : {euro(immo_total)} € (annuel)",
-            f"Cession : {euro(ces_total)} € (annuel)",
             f"Prestations familiales : {euro(pf_ann)} € (annuel) [= {euro(float(res_seg.get('prestations_familiales_a_compter_mensuel',0)))} €/mois × 12]",
             f"Avantage en nature logement : {euro(avn_ann)} € (annuel) [= {euro(float(res_seg.get('avantage_nature_logement_mensuel',0)))} €/mois × 12]",
         ]))
-        story.append(Spacer(1, 6))
 
+        story.append(Spacer(1, 8))
+
+        # ✅ Ressources cohabitants (par cohabitant)
         render_cohabitants_block(answers_snapshot.get("cohabitants_art34", []), res_seg)
         story.append(Spacer(1, 8))
 
+        # ✅ Synthèse (demandeur + cohabitants + total + immu)
         render_totaux_block(res_seg)
         story.append(Spacer(1, 10))
 
+        # ✅ RI
         render_ri_block(res_seg, seg_info, seg_all)
         story.append(Spacer(1, 8))
 
@@ -1295,7 +1596,6 @@ def ui_revenus_block(prefix: str) -> list:
     return lst
 
 
-# ✅ show_simple_art34 ajouté : quand False, on masque le bloc "Cohabitants admissibles (mode simple)"
 def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, show_simple_art34: bool = True) -> dict:
     answers = {}
 
@@ -1327,7 +1627,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
             st.markdown(f"**Cohabitant {i+1}**")
             c1, c2, c3 = st.columns([2, 1, 1])
 
-            # ✅ Nouveau: nom optionnel (tu peux laisser vide et garder “débiteur direct 1/2”)
             nom = c1.text_input("Nom (optionnel)", value="", key=f"{prefix}_coh_name_{i}")
 
             typ = c1.selectbox(
@@ -1354,7 +1653,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
                     pf_links.append({"dem_index": int(dem_idx) - 1, "pf_mensuel": float(pf_m)})
 
             cohabitants.append({
-                "name": str(nom).strip(),  # ✅ stocké pour PDF + affichage
+                "name": str(nom).strip(),
                 "type": typ,
                 "revenu_net_annuel": float(rev_annuel),
                 "exclure": bool(excl),
@@ -1476,6 +1775,10 @@ if multi_mode:
     dossiers = []
     for i in range(int(nb_dem)):
         st.markdown(f"### Dossier {i+1}")
+
+        # ✅ Ajout demandé: nom du demandeur, dès le début, pour le PDF
+        demandeur_nom = st.text_input("Nom du demandeur (pour le PDF)", value="", key=f"hd_dem_nom_{i}")
+
         label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
         cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
         enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"hd_enf_{i}")
@@ -1509,6 +1812,7 @@ if multi_mode:
         dossiers.append({
             "idx": i,
             "label": label,
+            "demandeur_nom": str(demandeur_nom).strip(),
             "categorie": cat,
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
@@ -1626,6 +1930,7 @@ if multi_mode:
             for d in dossiers:
                 answers = dict(menage_common)
                 answers.update({
+                    "demandeur_nom": d.get("demandeur_nom", ""),
                     "categorie": d["categorie"],
                     "enfants_a_charge": d["enfants_a_charge"],
                     "date_demande": d["date_demande"],
@@ -1658,15 +1963,16 @@ if multi_mode:
                     res["cohabitants_part_a_compter_annuel"] = art34_adv["cohabitants_part_a_compter_annuel"]
 
                     # Recalc totals (avec art.34 avancé)
-                    total_avant = r2(
+                    total_dem = r2(
                         float(res["revenus_demandeur_annuels"])
                         + float(res["capitaux_mobiliers_annuels"])
                         + float(res["immo_annuels"])
                         + float(res["cession_biens_annuelle"])
-                        + float(res["cohabitants_part_a_compter_annuel"])
                         + float(res["prestations_familiales_a_compter_annuel"])
                         + float(res["avantage_nature_logement_annuel"])
                     )
+                    total_coh = r2(float(res["cohabitants_part_a_compter_annuel"]))
+                    total_avant = r2(total_dem + total_coh)
 
                     taux_ris_annuel = float(res["taux_ris_annuel"])
                     immu = 0.0
@@ -1678,6 +1984,8 @@ if multi_mode:
                     ris_ann = r2(max(0.0, taux_ris_annuel - total_apres))
                     ris_m = r2(ris_ann / 12.0)
 
+                    res["total_ressources_demandeur_avant_immunisation_annuel"] = float(total_dem)
+                    res["total_ressources_cohabitants_annuel"] = float(total_coh)
                     res["total_ressources_avant_immunisation_simple_annuel"] = float(total_avant)
                     res["immunisation_simple_annuelle"] = float(immu)
                     res["total_ressources_apres_immunisation_simple_annuel"] = float(total_apres)
@@ -1710,6 +2018,7 @@ if multi_mode:
         for r in results:
             row = {
                 "Dossier": r["_label"],
+                "Demandeur": r.get("demandeur_nom", ""),
                 "Catégorie": r["categorie"],
                 "Couple ?": "Oui" if r.get("couple_demandeur") else "Non",
                 "RIS mensuel": round(r["ris_theorique_mensuel"], 2),
@@ -1770,6 +2079,10 @@ else:
     answers = {}
 
     st.subheader("Profil")
+
+    # ✅ Ajout demandé: nom du demandeur (dès le début) -> PDF
+    answers["demandeur_nom"] = st.text_input("Nom du demandeur (pour le PDF)", value="")
+
     answers["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"])
     answers["enfants_a_charge"] = st.number_input("Enfants à charge", min_value=0, value=0, step=1)
 
