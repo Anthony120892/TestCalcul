@@ -1038,8 +1038,8 @@ def make_decision_pdf_cpas(
     ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
 
     # ✅ décalage du logo seulement (cellule 0,0)
-    ("LEFTPADDING", (0, 0), (0, 0), -12),  # mets -6, -10, -15 selon le rendu
-    ("TOPPADDING",  (0, 0), (0, 0), -10),  # idem: -4, -8, -12
+    ("LEFTPADDING", (0, 0), (0, 0), -15),  # mets -6, -10, -15 selon le rendu
+    ("TOPPADDING",  (0, 0), (0, 0), -12),  # idem: -4, -8, -12
 ]))
 
     story.append(header_tbl)
