@@ -1017,15 +1017,15 @@ def make_decision_pdf_cpas(
     story.append(Spacer(1, 8))
 
     # Meta
-    story.append(Paragraph(
-        f"Catégorie : <b>{res_mois_suivants.get('categorie','')}</b> — "
-        f"Taux RI annuel (référence) : <b>{euro(res_mois_suivants.get('taux_ris_annuel',0))} €</b>",
-        base
-    ))
-    story.append(Paragraph(
-        f"Taux RI mensuel (dérivé) : <b>{euro(res_mois_suivants.get('taux_ris_mensuel_derive',0))} €</b>",
-        base
-    ))
+   # story.append(Paragraph(
+    #    f"Catégorie : <b>{res_mois_suivants.get('categorie','')}</b> — "
+    #    f"Taux RI annuel (référence) : <b>{euro(res_mois_suivants.get('taux_ris_annuel',0))} €</b>",
+    #    base
+   # ))
+   # story.append(Paragraph(
+    #    f"Taux RI mensuel (dérivé) : <b>{euro(res_mois_suivants.get('taux_ris_mensuel_derive',0))} €</b>",
+   #     base
+   # ))
     story.append(Spacer(1, 10))
 
     def bullets(lines: list[str]):
