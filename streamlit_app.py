@@ -1408,7 +1408,7 @@ def make_decision_pdf_cpas(
         story.append(Paragraph("Calcul :", h2))
         story.append(Paragraph(title_period, h3))
 
-        story.append(Paragraph("Ressources à considérer <font size=9>(ne pas oublier de déduire l’immunisation forfaitaire)</font> :", h2))
+        story.append(Paragraph("Ressources à considérer <font size=9></font> :", h2))
 
         story.append(Paragraph("Ressources du demandeur (propres) :", h3))
 
