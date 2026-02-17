@@ -930,6 +930,9 @@ def compute_first_month_segments(answers: dict, engine: dict) -> dict:
 #     - Rubriques: ressources propres (demandeur) + ressources cohabitants (par cohabitant)
 #     - Synthèse: demandeur + cohabitants + total, puis immunisation
 #     - Détails capitaux (tranches) + immobilier (par bien) + cession (par tranches aussi)
+#   ✅ NOUVEAU (ta demande ici):
+#     - Logo CPAS coin supérieur gauche (OK)
+#     - Titre aligné AU MÊME NIVEAU que le logo + plus grand (OK)
 # ============================================================
 def euro(x: float) -> str:
     x = float(x or 0.0)
@@ -985,7 +988,9 @@ def make_decision_pdf_cpas(
     cell = ParagraphStyle("cell", parent=base, fontSize=9.0, leading=11)
     cell_small = ParagraphStyle("cell_small", parent=base, fontSize=8.6, leading=10.6)
     small = ParagraphStyle("small", parent=base, fontSize=9, leading=12, textColor=colors.grey)
-    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, leading=18, spaceAfter=6)
+
+    # ✅ Titre plus grand
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=20, leading=22, spaceAfter=6)
     h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=14, spaceBefore=10, spaceAfter=4)
     h3 = ParagraphStyle("h3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=10.5, leading=13, spaceBefore=6, spaceAfter=2)
 
@@ -993,8 +998,11 @@ def make_decision_pdf_cpas(
 
     # Header
     logo_elem = None
+    logo_h = 3.2 * cm  # ✅ logo bien "bloc" en haut à gauche
+    logo_w = 3.8 * cm
     if logo_path and os.path.exists(logo_path):
-        logo_elem = Image(logo_path, width=4.5*cm, height=3.5*cm)
+        logo_elem = Image(logo_path, width=logo_w, height=logo_h)
+        logo_elem.hAlign = "LEFT"
 
     demandeur_nom = _safe(answers_snapshot.get("demandeur_nom", "")) or _safe(res_mois_suivants.get("demandeur_nom", ""))
 
@@ -1005,9 +1013,15 @@ def make_decision_pdf_cpas(
     if demandeur_nom:
         header_data.append(["", Paragraph(f"Demandeur : <b>{demandeur_nom}</b>", base)])
 
-    header_tbl = Table(header_data, colWidths=[3.2*cm, 13.0*cm])
+    # ✅ Row height = hauteur logo, pour aligner verticalement le titre "au même niveau"
+    first_row_h = logo_h if logo_elem else None
+    row_heights = [first_row_h] + [None] * (len(header_data) - 1)
+
+    header_tbl = Table(header_data, colWidths=[logo_w + 0.2*cm, 16.2*cm - (logo_w + 0.2*cm)], rowHeights=row_heights)
     header_tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("VALIGN", (0, 0), (0, 0), "TOP"),       # logo collé en haut
+        ("VALIGN", (1, 0), (1, 0), "MIDDLE"),    # ✅ titre aligné verticalement sur le logo
+        ("VALIGN", (0, 1), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ("TOPPADDING", (0, 0), (-1, -1), 0),
@@ -1244,18 +1258,6 @@ def make_decision_pdf_cpas(
         ]
         story.append(bullets(lines))
 
-        #seuils = det.get("seuils", {}) or {}
-       # rows = [
-         #   ["Seuil / taux", "Valeur"],
-          #  ["t0_max (seuil exonéré)", f"{euro(seuils.get('t0_max',0))} €"],
-           # ["t1_min", f"{euro(seuils.get('t1_min',0))} €"],
-            #["t1_max", f"{euro(seuils.get('t1_max',0))} €"],
-           # ["t1_rate", f"{seuils.get('t1_rate',0):.2f}"],
-           # ["t2_rate", f"{seuils.get('t2_rate',0):.2f}"],
-       # ]
-      #  story.append(money_table(rows, col_widths=[8.2*cm, 8.0*cm]))
-      #  story.append(Spacer(1, 4))
-
         tr = det.get("tranches", []) or []
         rows2 = [["Tranche", "Base", "Taux", "Calcul", "Produit"]]
         for t in tr:
@@ -1311,7 +1313,6 @@ def make_decision_pdf_cpas(
 
         story.append(Paragraph("Cession de biens — détail :", h3))
 
-        # détail des cessions
         rows = [["Cession", "Valeur vénale", "Usufruit ?", "Ratio", "Valeur retenue"]]
         for c in (det.get("details_cessions") or []):
             rows.append([
@@ -1324,7 +1325,6 @@ def make_decision_pdf_cpas(
         story.append(money_table(rows, col_widths=[1.5*cm, 3.2*cm, 2.1*cm, 2.0*cm, 6.8*cm]))
         story.append(Spacer(1, 4))
 
-        # étapes
         lines = [
             f"Brut retenu : {euro(det.get('brut_total',0))} €",
             f"Dettes déductibles : {euro(det.get('dettes_deductibles',0))} € → après dettes : {euro(det.get('apres_dettes',0))} €",
@@ -1395,13 +1395,11 @@ def make_decision_pdf_cpas(
 
         story.append(Paragraph("Ressources à considérer <font size=9>(ne pas oublier de déduire l’immunisation forfaitaire)</font> :", h2))
 
-        # ✅ Ressources propres du demandeur (propres)
         story.append(Paragraph("Ressources du demandeur (propres) :", h3))
 
-        tot_rev_dem = render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
-        tot_rev_conj = 0.0
+        _ = render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
         if bool(answers_snapshot.get("couple_demandeur", False)):
-            tot_rev_conj = render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
+            _ = render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
 
         story.append(Spacer(1, 4))
         render_capitaux_detail(res_seg)
@@ -1419,16 +1417,12 @@ def make_decision_pdf_cpas(
         ]))
 
         story.append(Spacer(1, 8))
-
-        # ✅ Ressources cohabitants (par cohabitant)
         render_cohabitants_block(answers_snapshot.get("cohabitants_art34", []), res_seg)
         story.append(Spacer(1, 8))
 
-        # ✅ Synthèse (demandeur + cohabitants + total + immu)
         render_totaux_block(res_seg)
         story.append(Spacer(1, 10))
 
-        # ✅ RI
         render_ri_block(res_seg, seg_info, seg_all)
         story.append(Spacer(1, 8))
 
@@ -1776,7 +1770,6 @@ if multi_mode:
     for i in range(int(nb_dem)):
         st.markdown(f"### Dossier {i+1}")
 
-        # ✅ Ajout demandé: nom du demandeur, dès le début, pour le PDF
         demandeur_nom = st.text_input("Nom du demandeur (pour le PDF)", value="", key=f"hd_dem_nom_{i}")
 
         label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
@@ -2080,7 +2073,6 @@ else:
 
     st.subheader("Profil")
 
-    # ✅ Ajout demandé: nom du demandeur (dès le début) -> PDF
     answers["demandeur_nom"] = st.text_input("Nom du demandeur (pour le PDF)", value="")
 
     answers["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"])
