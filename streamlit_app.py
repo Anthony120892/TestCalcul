@@ -357,18 +357,34 @@ def cohabitant_is_active_asof(c: dict, as_of: date) -> bool:
     return as_of <= dquit
 
 
+def _coh_display_name(c: dict) -> str:
+    # ✅ Nouveau: nom optionnel (sinon on garde "débit./partenaire" etc.)
+    n = (c.get("name") or c.get("nom") or c.get("label") or "").strip()
+    return n
+
+
 def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          taux_a_laisser_mensuel: float,
                                          partage_active: bool,
                                          nb_demandeurs_a_partager: int,
                                          as_of: date) -> dict:
+    """
+    ✅ MODIF DEMANDÉE:
+    - Déduction du taux (876,13€) appliquée séparément à CHAQUE débiteur:
+        excedent_i = max(0, revenu_i_m - taux)
+      puis total = somme(excedent_i)
+    - Les détails retournés permettent d’afficher le calcul par cohabitant dans le PDF.
+    """
     taux = max(0.0, float(taux_a_laisser_mensuel))
 
     revenus_partenaire_m = 0.0
     nb_partenaire = 0
 
-    revenus_debiteurs_m = 0.0
+    revenus_debiteurs_m_brut = 0.0
     nb_debiteurs = 0
+
+    # Nouveau: somme des excédents après déduction par personne
+    debiteurs_excedents_m_total = 0.0
 
     detail_partenaire = []
     detail_debiteurs = []
@@ -383,36 +399,62 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         revenu_ann = max(0.0, float(c.get("revenu_net_annuel", 0.0)))
         revenu_m = revenu_ann / 12.0
 
+        nom = _coh_display_name(c)
+
         if typ == "partenaire":
             revenus_partenaire_m += revenu_m
             nb_partenaire += 1
-            detail_partenaire.append({"type": "partenaire", "mensuel": r2(revenu_m), "annuel": r2(revenu_ann)})
-        elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
-            revenus_debiteurs_m += revenu_m
-            nb_debiteurs += 1
-            detail_debiteurs.append({"type": typ, "mensuel": r2(revenu_m), "annuel": r2(revenu_ann)})
+            detail_partenaire.append({
+                "type": "partenaire",
+                "name": nom,
+                "mensuel": r2(revenu_m),
+                "annuel": r2(revenu_ann)
+            })
 
-    part_debiteurs_m = max(0.0, revenus_debiteurs_m - (nb_debiteurs * taux))
+        elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
+            revenus_debiteurs_m_brut += revenu_m
+            nb_debiteurs += 1
+
+            excedent_m = max(0.0, revenu_m - taux)  # ✅ déduction par personne
+            debiteurs_excedents_m_total += excedent_m
+
+            detail_debiteurs.append({
+                "type": typ,
+                "name": nom,
+                "mensuel": r2(revenu_m),
+                "annuel": r2(revenu_ann),
+                "taux_a_laisser_mensuel": r2(taux),
+                "excedent_mensuel_apres_deduction": r2(excedent_m),
+            })
+
+    debiteurs_excedents_m_total = r2(debiteurs_excedents_m_total)
 
     if partage_active:
         n = max(1, int(nb_demandeurs_a_partager))
-        part_debiteurs_m_par_dem = part_debiteurs_m / n
+        part_debiteurs_m_par_dem = r2(debiteurs_excedents_m_total / n)
     else:
-        part_debiteurs_m_par_dem = part_debiteurs_m
+        part_debiteurs_m_par_dem = r2(debiteurs_excedents_m_total)
 
-    total_cohabitants_m = revenus_partenaire_m + part_debiteurs_m_par_dem
+    total_cohabitants_m = r2(revenus_partenaire_m + part_debiteurs_m_par_dem)
 
     return {
         "cohabitants_n_partenaire_pris_en_compte": int(nb_partenaire),
         "cohabitants_n_debiteurs_pris_en_compte": int(nb_debiteurs),
+
+        # brut (utile pour transparence)
         "revenus_partenaire_mensuels_total": r2(revenus_partenaire_m),
-        "revenus_debiteurs_mensuels_total": r2(revenus_debiteurs_m),
-        "cohabitants_part_debiteurs_avant_partage_mensuel": r2(part_debiteurs_m),
+        "revenus_debiteurs_mensuels_total": r2(revenus_debiteurs_m_brut),
+
+        # ✅ renommage logique: avant partage = somme des excédents après déduction individuelle
+        "cohabitants_part_debiteurs_avant_partage_mensuel": r2(debiteurs_excedents_m_total),
         "cohabitants_part_debiteurs_apres_partage_mensuel": r2(part_debiteurs_m_par_dem),
+
         "cohabitants_part_a_compter_mensuel": r2(total_cohabitants_m),
         "cohabitants_part_a_compter_annuel": r2(total_cohabitants_m * 12.0),
+
         "detail_partenaire": detail_partenaire,
         "detail_debiteurs": detail_debiteurs,
+
         "taux_a_laisser_mensuel": r2(taux),
         "partage_active": bool(partage_active),
         "nb_demandeurs_partage": int(nb_demandeurs_a_partager),
@@ -709,7 +751,8 @@ def compute_first_month_segments(answers: dict, engine: dict) -> dict:
 
 # ============================================================
 # PDF — VERSION "CPAS"
-#   ✅ On affiche les calculs (ALE + exo socio-pro) dans le bloc revenus
+#   ✅ Correction chevauchement: cellules en Paragraph + wordwrap
+#   ✅ Détail Art.34 par cohabitant (déduction individuelle)
 # ============================================================
 def euro(x: float) -> str:
     x = float(x or 0.0)
@@ -762,6 +805,9 @@ def make_decision_pdf_cpas(
 
     styles = getSampleStyleSheet()
     base = ParagraphStyle("base", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=13)
+    # ✅ Styles anti-chevauchement (tables)
+    cell = ParagraphStyle("cell", parent=base, fontSize=9.0, leading=11)
+    cell_small = ParagraphStyle("cell_small", parent=base, fontSize=8.6, leading=10.6)
     small = ParagraphStyle("small", parent=base, fontSize=9, leading=12, textColor=colors.grey)
     h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=16, leading=18, spaceAfter=6)
     h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=14, spaceBefore=10, spaceAfter=4)
@@ -802,23 +848,39 @@ def make_decision_pdf_cpas(
     story.append(Spacer(1, 10))
 
     def bullets(lines: list[str]):
+        # ✅ Wrap propre: chaque item est un Paragraph
         items = [ListItem(Paragraph(l, base), leftIndent=12) for l in lines]
         return ListFlowable(items, bulletType="bullet", start="•", leftIndent=14)
 
     def money_table(rows: list[list[str]], col_widths=None):
+        """
+        ✅ Fix chevauchement:
+        - on convertit toutes les cellules en Paragraph -> retour à la ligne automatique
+        - repeatRows=1 pour répéter l’en-tête si ça passe sur plusieurs pages
+        """
         if not rows:
             return Paragraph("", base)
-        tbl = Table(rows, colWidths=col_widths)
+
+        conv = []
+        for ridx, r in enumerate(rows):
+            row_conv = []
+            for cidx, v in enumerate(r):
+                txt = "" if v is None else str(v)
+                # en-tête légèrement plus lisible
+                stl = cell if ridx == 0 else cell_small
+                row_conv.append(Paragraph(txt.replace("\n", "<br/>"), stl))
+            conv.append(row_conv)
+
+        tbl = Table(conv, colWidths=col_widths, repeatRows=1)
         tbl.setStyle(TableStyle([
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-            ("FONTSIZE", (0,0), (-1,-1), 9.2),
-            ("VALIGN", (0,0), (-1,-1), "TOP"),
-            ("LINEBELOW", (0,0), (-1,0), 0.5, colors.black),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
-            ("LEFTPADDING", (0,0), (-1,-1), 4),
-            ("RIGHTPADDING", (0,0), (-1,-1), 4),
-            ("TOPPADDING", (0,0), (-1,-1), 3),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.black),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ]))
         return tbl
 
@@ -831,7 +893,11 @@ def make_decision_pdf_cpas(
             brut_m, exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
             val = float(cfg_ale.get("valeur_cheque", 0.0))
             exo = float(cfg_ale.get("exon_par_cheque", 6.0))
-            return f"ALE : {nb:g} chq/mois × {euro(val)} € − {nb:g} × {euro(exo)} € = {euro(a_compter_m)} €/mois (soit {euro(a_compter_m*12)} €/an)"
+            return (
+                f"ALE : {nb:g} chq/mois × {euro(val)} € = {euro(brut_m)} €/mois ; "
+                f"exo {nb:g} × {euro(exo)} € = {euro(exo_m)} €/mois ; "
+                f"à compter = {euro(a_compter_m)} €/mois (soit {euro(a_compter_m*12)} €/an)"
+            )
 
         a = float(r.get("montant_annuel", 0.0))
         m = a / 12.0
@@ -841,13 +907,22 @@ def make_decision_pdf_cpas(
                 return f"{typ} : non éligible → montant compté = {euro(a)} €/an"
             ded = min(float(cfg_soc.get("max_mensuel", 0.0)), m)
             compt_m = max(0.0, m - ded)
-            return f"{typ} : {euro(m)} €/mois − min({euro(cfg_soc.get('max_mensuel',0))} €/mois, {euro(m)} €/mois) = {euro(compt_m)} €/mois (×12)"
+            # ✅ explicite la déduction appliquée
+            return (
+                f"{typ} : {euro(m)} €/mois − déduction {euro(ded)} €/mois "
+                f"(max {euro(cfg_soc.get('max_mensuel',0))} €/mois) = {euro(compt_m)} €/mois (×12)"
+            )
+
         if typ == "artistique_irregulier":
             if not eligible:
                 return f"artistique irrégulier : non éligible → montant compté = {euro(a)} €/an"
-            ded_m = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
-            compt_m = max(0.0, m - min(ded_m, m))
-            return f"artistique irrégulier : {euro(m)} €/mois − min({euro(ded_m)} €/mois, {euro(m)} €/mois) = {euro(compt_m)} €/mois (×12)"
+            ded_m_ref = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
+            ded = min(ded_m_ref, m)
+            compt_m = max(0.0, m - ded)
+            return (
+                f"artistique irrégulier : {euro(m)} €/mois − déduction {euro(ded)} €/mois "
+                f"(réf {euro(ded_m_ref)} €/mois) = {euro(compt_m)} €/mois (×12)"
+            )
 
         return f"standard : {euro(a)} €/an (soit {euro(m)} €/mois)"
 
@@ -864,14 +939,12 @@ def make_decision_pdf_cpas(
             label = _safe(r.get("label", ""))
             typ = _safe(r.get("type", "standard"))
 
-            # Reconstituer le montant "compté annuel" avec nos règles (pour afficher proprement)
+            # Reconstituer le montant "compté annuel"
             if typ == "ale" and "nb_cheques_mois" in r:
                 nb = float(r.get("nb_cheques_mois", 0.0))
                 _brut_m, _exo_m, a_compter_m = _ale_montants(nb, cfg_ale)
                 compt_ann = float(a_compter_m) * 12.0
             else:
-                # on utilise la même logique que le moteur: on recalculera via revenus_annuels_apres_exonerations
-                # mais ici, item par item:
                 a = max(0.0, float(r.get("montant_annuel", 0.0)))
                 m = a / 12.0
                 eligible = bool(r.get("eligible", True))
@@ -882,7 +955,6 @@ def make_decision_pdf_cpas(
                     ded_m = float(cfg_soc.get("artistique_annuel", 0.0)) / 12.0
                     compt_ann = max(0.0, (m - min(ded_m, m)) * 12.0)
                 elif typ == "ale":
-                    # compat: champ "part excédentaire mensuelle"
                     compt_ann = max(0.0, float(r.get("ale_part_excedentaire_mensuel", 0.0))) * 12.0
                 else:
                     compt_ann = a
@@ -896,7 +968,7 @@ def make_decision_pdf_cpas(
                 f"{euro(compt_ann)} €"
             ])
 
-        story.append(money_table(rows, col_widths=[5.2*cm, 2.3*cm, 6.0*cm, 3.7*cm]))
+        story.append(money_table(rows, col_widths=[5.0*cm, 2.2*cm, 6.3*cm, 3.7*cm]))
         story.append(Spacer(1, 4))
 
         story.append(Paragraph(
@@ -907,22 +979,30 @@ def make_decision_pdf_cpas(
             f"</font>",
             small
         ))
-        story.append(Paragraph(f"<font size=9 color='grey'>Total revenus comptés (annuel) pour ce bloc : {euro(total_ann)} €</font>", small))
+        story.append(Paragraph(
+            f"<font size=9 color='grey'>Total revenus comptés (annuel) pour ce bloc : {euro(total_ann)} €</font>",
+            small
+        ))
+
+    def _coh_label_pdf(c: dict) -> str:
+        typ = normalize_art34_type(c.get("type", "autre"))
+        nom = (c.get("name") or c.get("nom") or c.get("label") or "").strip()
+        return f"{nom} ({typ})" if nom else typ
 
     def render_cohabitants_block(cohabitants: list, res_seg: dict):
         story.append(Paragraph("Ressources des cohabitants :", h3))
 
         active_info = []
         for c in cohabitants or []:
-            typ = normalize_art34_type(c.get("type", "autre"))
             rev_ann = float(c.get("revenu_net_annuel", 0.0))
             dq = c.get("date_quitte_menage")
             excl = bool(c.get("exclure", False))
             dq_txt = f" (départ: {date_fr(dq)})" if dq else ""
+            who = _coh_label_pdf(c)
             if excl:
-                active_info.append(f"{typ} — {euro(rev_ann)} €/an — EXCLU{dq_txt}")
+                active_info.append(f"{who} — {euro(rev_ann)} €/an — EXCLU{dq_txt}")
             else:
-                active_info.append(f"{typ} — {euro(rev_ann)} €/an{dq_txt}")
+                active_info.append(f"{who} — {euro(rev_ann)} €/an{dq_txt}")
 
         if active_info:
             story.append(bullets(active_info))
@@ -934,23 +1014,49 @@ def make_decision_pdf_cpas(
         part_ann = float(res_seg.get("cohabitants_part_a_compter_annuel", 0.0))
 
         partn_m = float(res_seg.get("revenus_partenaire_mensuels_total", 0.0))
-        debt_m_tot = float(res_seg.get("revenus_debiteurs_mensuels_total", 0.0))
+        debt_m_tot_brut = float(res_seg.get("revenus_debiteurs_mensuels_total", 0.0))
         n_debt = int(res_seg.get("cohabitants_n_debiteurs_pris_en_compte", 0))
         debt_av = float(res_seg.get("cohabitants_part_debiteurs_avant_partage_mensuel", 0.0))
         debt_ap = float(res_seg.get("cohabitants_part_debiteurs_apres_partage_mensuel", 0.0))
+
+        detail_deb = res_seg.get("detail_debiteurs", []) or []
+        detail_part = res_seg.get("detail_partenaire", []) or []
 
         lines = []
         if part_m <= 0:
             lines.append("Pas de ressource cohabitant prise en compte pour la période.")
         else:
-            if partn_m > 0:
-                lines.append(f"Partenaire(s) : {euro(partn_m)} € (mensuel total compté)")
+            # Partenaires
+            if partn_m > 0 and (detail_part or partn_m > 0):
+                if detail_part:
+                    for p in detail_part:
+                        who = (p.get("name") or "").strip()
+                        who = f"{who} (partenaire)" if who else "partenaire"
+                        lines.append(f"{who} : {euro(float(p.get('mensuel',0)))} €/mois")
+                lines.append(f"Total partenaire(s) : {euro(partn_m)} € (mensuel)")
+
+            # ✅ Débiteurs: détail par personne, puis total
             if n_debt > 0:
-                lines.append(f"Débiteurs : {euro(debt_m_tot)} € − {n_debt} × {euro(taux)} € = {euro(debt_av)} € (mensuel)")
+                lines.append(f"Débiteurs (déduction {euro(taux)} €/mois appliquée individuellement) :")
+                if detail_deb:
+                    for d in detail_deb:
+                        who = (d.get("name") or "").strip()
+                        typ = d.get("type", "")
+                        who = f"{who} ({typ})" if who else typ
+                        rm = float(d.get("mensuel", 0.0))
+                        ex = float(d.get("excedent_mensuel_apres_deduction", 0.0))
+                        lines.append(f"— {who} : {euro(rm)} − {euro(taux)} = {euro(ex)} €/mois")
+                else:
+                    # fallback si pas de détails (devrait rarement arriver)
+                    lines.append(f"Brut débiteurs : {euro(debt_m_tot_brut)} €/mois (total)")
+
+                lines.append(f"Total débiteurs après déduction : {euro(debt_av)} € (mensuel)")
                 if bool(res_seg.get("partage_active", False)):
                     nshare = int(res_seg.get("nb_demandeurs_partage", 1))
                     lines.append(f"Partage : {euro(debt_av)} € / {nshare} = {euro(debt_ap)} € (mensuel)")
+
             lines.append(f"Total cohabitants compté : {euro(part_m)} € × 12 = {euro(part_ann)} €")
+
         story.append(bullets(lines))
 
     def render_totaux_block(res_seg: dict):
@@ -1034,7 +1140,10 @@ def make_decision_pdf_cpas(
             if idx < len(seg_first_month["segments"]) - 1:
                 story.append(PageBreak())
 
-        story.append(Paragraph(f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné", base))
+        story.append(Paragraph(
+            f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
+            base
+        ))
         story.append(Spacer(1, 8))
 
         story.append(PageBreak())
@@ -1152,7 +1261,7 @@ def ui_revenus_block(prefix: str) -> list:
             key=f"{prefix}_t_{i}"
         )
 
-        # ---- ALE: encodage en NB chèques/mois (pas de mensuel/annuel “€” à encoder) ----
+        # ---- ALE: encodage en NB chèques/mois ----
         if typ == "ale":
             nb_chq = c2.number_input("Nb chèques / mois", min_value=0, value=0, step=1, key=f"{prefix}_ale_n_{i}")
             brut_m, exo_m, a_compter_m = _ale_montants(nb_chq, cfg["ale"])
@@ -1165,7 +1274,6 @@ def ui_revenus_block(prefix: str) -> list:
                 "label": label,
                 "type": "ale",
                 "nb_cheques_mois": int(nb_chq),
-                # compat (pas utilisé si nb_cheques_mois présent)
                 "ale_part_excedentaire_mensuel": float(a_compter_m),
                 "eligible": True
             })
@@ -1218,6 +1326,10 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
         for i in range(int(nb_coh)):
             st.markdown(f"**Cohabitant {i+1}**")
             c1, c2, c3 = st.columns([2, 1, 1])
+
+            # ✅ Nouveau: nom optionnel (tu peux laisser vide et garder “débiteur direct 1/2”)
+            nom = c1.text_input("Nom (optionnel)", value="", key=f"{prefix}_coh_name_{i}")
+
             typ = c1.selectbox(
                 "Type",
                 ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
@@ -1242,6 +1354,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
                     pf_links.append({"dem_index": int(dem_idx) - 1, "pf_mensuel": float(pf_m)})
 
             cohabitants.append({
+                "name": str(nom).strip(),  # ✅ stocké pour PDF + affichage
                 "type": typ,
                 "revenu_net_annuel": float(rev_annuel),
                 "exclure": bool(excl),
