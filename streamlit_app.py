@@ -1478,7 +1478,7 @@ if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
 st.title("Calcul RIS")
-st.caption("Taux RIS ANNUELS (référence centime près). Revenus encodables mensuel OU annuel. Gestion départ cohabitant (segments CPAS).")
+st.caption()
 
 engine = load_engine()
 cfg = engine["config"]
