@@ -185,11 +185,11 @@ def capital_mobilier_calc(total_capital: float,
     adj_total = total_capital * fraction
 
     # seuils ajustés à la fraction (comme ton code d’origine)
-    t0_max = float(cfg_cap["t0_max"]) * fraction
-    t1_min = float(cfg_cap["t1_min"]) * fraction
-    t1_max = float(cfg_cap["t1_max"]) * fraction
-    r1_ = float(cfg_cap["t1_rate"])
-    r2_ = float(cfg_cap["t2_rate"])
+    #t0_max = float(cfg_cap["t0_max"]) * fraction
+    #t1_min = float(cfg_cap["t1_min"]) * fraction
+    #t1_max = float(cfg_cap["t1_max"]) * fraction
+    #r1_ = float(cfg_cap["t1_rate"])
+    #r2_ = float(cfg_cap["t2_rate"])
 
     # calcul + détail
     tranche1_base = max(0.0, min(adj_total, t1_max) - t1_min)
