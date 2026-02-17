@@ -1477,8 +1477,6 @@ st.set_page_config(page_title="Calcul RIS", layout="centered")
 if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
-st.title("Calcul RIS")
-st.caption()
 
 engine = load_engine()
 cfg = engine["config"]
