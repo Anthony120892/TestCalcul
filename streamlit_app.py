@@ -999,7 +999,7 @@ def make_decision_pdf_cpas(
     demandeur_nom = _safe(answers_snapshot.get("demandeur_nom", "")) or _safe(res_mois_suivants.get("demandeur_nom", ""))
 
     header_data = [
-        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul du RI", h1)],
+        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul du Revenu d'intégration", h1)],
         ["", Paragraph(f"Dossier : <b>{_safe(dossier_label)}</b>", base)],
     ]
     if demandeur_nom:
