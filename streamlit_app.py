@@ -962,7 +962,7 @@ def make_decision_pdf_cpas(
         from reportlab.lib.pagesizes import A4
         from reportlab.platypus import (
             SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-            Image, ListFlowable, ListItem, PageBreak
+            Image, ListFlowable, ListItem, PageBreak, KeepTogether
         )
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
@@ -998,10 +998,21 @@ def make_decision_pdf_cpas(
 
     demandeur_nom = _safe(answers_snapshot.get("demandeur_nom", "")) or _safe(res_mois_suivants.get("demandeur_nom", ""))
 
+    #header_data = [
+        #[logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul du Revenu d'intégration", h1)],
+        #["", Paragraph(f"Dossier : <b>{_safe(dossier_label)}</b>", base)],
+    #]
     header_data = [
-        [logo_elem if logo_elem else Paragraph("", base), Paragraph("Calcul du Revenu d'intégration", h1)],
-        ["", Paragraph(f"Dossier : <b>{_safe(dossier_label)}</b>", base)],
-    ]
+    [
+        logo_elem if logo_elem else Paragraph("", base),
+        KeepTogether([
+            Spacer(1, 6),  # <-- augmente/diminue (ex: 4, 8, 10) pour descendre le titre
+            Paragraph("Revenu d’intégration", h1),
+        ])
+    ],
+    ["", Paragraph(f"Dossier : <b>{_safe(dossier_label)}</b>", base)],
+]
+
     if demandeur_nom:
         header_data.append(["", Paragraph(f"Demandeur : <b>{demandeur_nom}</b>", base)])
 
