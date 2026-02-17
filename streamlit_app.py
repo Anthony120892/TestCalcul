@@ -1017,16 +1017,31 @@ def make_decision_pdf_cpas(
     first_row_h = logo_h if logo_elem else None
     row_heights = [first_row_h] + [None] * (len(header_data) - 1)
 
-    header_tbl = Table(header_data, colWidths=[logo_w + 0.2*cm, 16.2*cm - (logo_w + 0.2*cm)], rowHeights=row_heights)
+   #header_tbl = Table(header_data, colWidths=[logo_w + 0.2*cm, 16.2*cm - (logo_w + 0.2*cm)], rowHeights=row_heights)
+    #header_tbl.setStyle(TableStyle([
+        #("VALIGN", (0, 0), (-1, -1), "TOP"),       # logo collé en haut
+        #("VALIGN", (1, 0), (1, 0), "MIDDLE"),    # ✅ titre aligné verticalement sur le logo
+        #("VALIGN", (0, 1), (-1, -1), "TOP"),
+        #("LEFTPADDING", (0, 0), (-1, -1), 0),
+        #("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        #("TOPPADDING", (0, 0), (-1, -1), 0),
+        #("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    #]))
+    header_tbl = Table(header_data, colWidths=[3.2*cm, 13.0*cm])
     header_tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),       # logo collé en haut
-        ("VALIGN", (1, 0), (1, 0), "MIDDLE"),    # ✅ titre aligné verticalement sur le logo
-        ("VALIGN", (0, 1), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-    ]))
+    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+
+    # paddings généraux (comme tu as déjà)
+    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ("TOPPADDING", (0, 0), (-1, -1), 0),
+    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+
+    # ✅ décalage du logo seulement (cellule 0,0)
+    ("LEFTPADDING", (0, 0), (0, 0), -12),  # mets -6, -10, -15 selon le rendu
+    ("TOPPADDING",  (0, 0), (0, 0), -10),  # idem: -4, -8, -12
+]))
+
     story.append(header_tbl)
     story.append(Spacer(1, 8))
 
