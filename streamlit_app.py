@@ -999,7 +999,7 @@ def make_decision_pdf_cpas(
     # Header
     logo_elem = None
     logo_h = 3.2 * cm  # ✅ logo bien "bloc" en haut à gauche
-    logo_w = 3.8 * cm
+    logo_w = 4.2 * cm
     if logo_path and os.path.exists(logo_path):
         logo_elem = Image(logo_path, width=logo_w, height=logo_h)
         logo_elem.hAlign = "LEFT"
@@ -1038,8 +1038,8 @@ def make_decision_pdf_cpas(
     ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
 
     # ✅ décalage du logo seulement (cellule 0,0)
-    ("LEFTPADDING", (0, 0), (0, 0), -25),  # mets -6, -10, -15 selon le rendu
-    ("TOPPADDING",  (0, 0), (0, 0), -15),  # idem: -4, -8, -12
+    ("LEFTPADDING", (0, 0), (0, 0), -35),  # mets -6, -10, -15 selon le rendu
+    ("TOPPADDING",  (0, 0), (0, 0), -20),  # idem: -4, -8, -12
 ]))
 
     story.append(header_tbl)
