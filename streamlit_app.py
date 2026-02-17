@@ -979,8 +979,8 @@ def make_decision_pdf_cpas(
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=0.8*cm, rightMargin=1.8*cm,
-        topMargin=0.6*cm, bottomMargin=1.4*cm
+        leftMargin=0.0*cm, rightMargin=1.8*cm,
+        topMargin=0.0*cm, bottomMargin=1.4*cm
     )
 
     styles = getSampleStyleSheet()
