@@ -979,8 +979,8 @@ def make_decision_pdf_cpas(
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=1.8*cm, rightMargin=1.8*cm,
-        topMargin=1.4*cm, bottomMargin=1.4*cm
+        leftMargin=0.8*cm, rightMargin=1.8*cm,
+        topMargin=0.6*cm, bottomMargin=1.4*cm
     )
 
     styles = getSampleStyleSheet()
@@ -1019,7 +1019,7 @@ def make_decision_pdf_cpas(
 
     header_tbl = Table(header_data, colWidths=[logo_w + 0.2*cm, 16.2*cm - (logo_w + 0.2*cm)], rowHeights=row_heights)
     header_tbl.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (0, 0), "TOP"),       # logo collé en haut
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),       # logo collé en haut
         ("VALIGN", (1, 0), (1, 0), "MIDDLE"),    # ✅ titre aligné verticalement sur le logo
         ("VALIGN", (0, 1), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
