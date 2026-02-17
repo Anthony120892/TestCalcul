@@ -184,7 +184,7 @@ def capital_mobilier_calc(total_capital: float,
 
     adj_total = total_capital * fraction
 
-     seuils ajustés à la fraction (comme ton code d’origine)
+    seuils ajustés à la fraction (comme ton code d’origine)
     t0_max = float(cfg_cap["t0_max"]) * fraction
     t1_min = float(cfg_cap["t1_min"]) * fraction
     t1_max = float(cfg_cap["t1_max"]) * fraction
