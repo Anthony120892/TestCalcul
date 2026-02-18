@@ -1852,13 +1852,21 @@ if multi_mode:
         })
 
     # B) Ménage commun
-    st.subheader("B) Ménage (commun)")
-    menage_common = ui_menage_common(
-        "hd_menage",
-        nb_demandeurs=int(nb_dem),
-        enable_pf_links=True,
-        show_simple_art34=not advanced_household
-    )
+    #st.subheader("B) Ménage (commun)")
+    #menage_common = ui_menage_common(
+        #"hd_menage",
+        #nb_demandeurs=int(nb_dem),
+        #enable_pf_links=True,
+        #show_simple_art34=not advanced_household
+    #)
+# B) (UI) — On retire le gros bloc, on met en expanders plus clean
+    with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
+        menage_common = ui_menage_common(
+            "hd_menage",
+            nb_demandeurs=int(nb_dem),
+            enable_pf_links=True,
+            show_simple_art34=not advanced_household
+        )
 
     # Inject PF-links
     for link in menage_common.get("pf_links", []):
