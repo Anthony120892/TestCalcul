@@ -1668,6 +1668,30 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
 
 def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> float:
     return float(revenus_annuels_apres_exonerations(rev_list or [], cfg_soc, cfg_ale))
+    
+def cohabitants_from_household_for_pdf(dossier: dict, household: dict) -> list:
+    out = []
+    seen = set()
+
+    def add_ids(ids: list, typ: str):
+        for mid in (ids or []):
+            if mid in seen:
+                continue
+            m = household.get("members_by_id", {}).get(mid)
+            if not m:
+                continue
+            seen.add(mid)
+            out.append({
+                "name": (m.get("name") or "").strip(),
+                "type": typ,  # "debiteur_direct_1" ou "debiteur_direct_2"
+                "revenu_net_annuel": float(m.get("revenu_net_annuel", 0.0)),
+                "exclure": bool(m.get("exclure", False)),
+                "date_quitte_menage": None
+            })
+
+    add_ids(dossier.get("art34_deg1_ids", []), "debiteur_direct_1")
+    add_ids(dossier.get("art34_deg2_ids", []), "debiteur_direct_2")
+    return out
 
 # ============================================================
 # ✅ UI Patrimoine personnel (par dossier) — 4 blocs complets
@@ -1968,6 +1992,27 @@ if multi_mode:
                 answers["_pp_avn_ann_add"] = r2(avn1 + avn2)
 
             # ------- calcul 1er mois segmenté + mois suivants -------
+            # ✅ MENAGE AVANCE : construire cohabitants_art34 depuis deg1/deg2 (pour PDF + cohérence)
+                if advanced_household and household.get("members_by_id"):
+                    coh = []
+                    deg1_ids = list(d.get("art34_deg1_ids", []) or [])
+                    deg2_ids = list(d.get("art34_deg2_ids", []) or [])
+                    ids = deg1_ids + deg2_ids
+
+                    for mid in ids:
+                        m = household["members_by_id"].get(mid)
+                        if not m:
+                            continue
+                        coh.append({
+                            "name": (m.get("name") or "").strip(),
+                            "type": "debiteur_direct_1" if mid in deg1_ids else "debiteur_direct_2",
+                            "revenu_net_annuel": float(m.get("revenu_net_annuel", 0.0)),
+                            "exclure": bool(m.get("exclure", False)),
+                            "date_quitte_menage": None,
+                        })
+
+                        answers["cohabitants_art34"] = coh
+
             seg_first = compute_first_month_segments(answers, engine)
             res_ms = seg_first.get("detail_mois_suivants", {}) or compute_officiel_cpas_annuel(answers, engine)
 
@@ -1986,6 +2031,59 @@ if multi_mode:
                     share_plan=share_plan,
                     prior_results=prior_results
                 )
+
+                    # ✅ 2A) Override "mois suivants"
+            res_ms["art34_mode"] = art34_adv.get("art34_mode", "MENAGE_AVANCE")
+            res_ms["art34_degree_utilise"] = art34_adv.get("art34_degree_utilise", 0)
+            res_ms["cohabitants_part_a_compter_mensuel"] = art34_adv.get("cohabitants_part_a_compter_mensuel", 0.0)
+            res_ms["cohabitants_part_a_compter_annuel"] = art34_adv.get("cohabitants_part_a_compter_annuel", 0.0)
+            res_ms["debug_deg1"] = art34_adv.get("debug_deg1")
+            res_ms["debug_deg2"] = art34_adv.get("debug_deg2")
+            res_ms["ris_injecte_mensuel"] = art34_adv.get("ris_injecte_mensuel", 0.0)
+
+            # Recalculer totaux & RI sur base de ce nouveau art.34
+            total_dem = float(res_ms.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
+            res_ms["total_ressources_cohabitants_annuel"] = float(res_ms["cohabitants_part_a_compter_annuel"])
+            res_ms["total_ressources_avant_immunisation_simple_annuel"] = r2(total_dem + float(res_ms["total_ressources_cohabitants_annuel"]))
+
+            immu = float(res_ms.get("immunisation_simple_annuelle", 0.0))
+            res_ms["total_ressources_apres_immunisation_simple_annuel"] = r2(max(0.0, float(res_ms["total_ressources_avant_immunisation_simple_annuel"]) - immu))
+
+            taux_ris_ann = float(res_ms.get("taux_ris_annuel", 0.0))
+            ri_ann = r2(max(0.0, taux_ris_ann - float(res_ms["total_ressources_apres_immunisation_simple_annuel"])))
+            res_ms["ris_theorique_annuel"] = float(ri_ann)
+            res_ms["ris_theorique_mensuel"] = float(r2(ri_ann / 12.0))
+
+            # ✅ 2B) Override les segments du 1er mois (sinon "Total 1er mois" part en vrille)
+            if seg_first and seg_first.get("segments"):
+                for s in seg_first["segments"]:
+                    res_seg = s.get("_detail_res")
+                    if not isinstance(res_seg, dict):
+                        continue
+
+                    # On applique le même override art.34 + recalcul RI
+                    res_seg["cohabitants_part_a_compter_mensuel"] = res_ms["cohabitants_part_a_compter_mensuel"]
+                    res_seg["cohabitants_part_a_compter_annuel"] = res_ms["cohabitants_part_a_compter_annuel"]
+                    total_dem_seg = float(res_seg.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
+                    res_seg["total_ressources_cohabitants_annuel"] = res_ms["total_ressources_cohabitants_annuel"]
+                    res_seg["total_ressources_avant_immunisation_simple_annuel"] = r2(total_dem_seg + float(res_seg["total_ressources_cohabitants_annuel"]))
+
+                    immu_seg = float(res_seg.get("immunisation_simple_annuelle", 0.0))
+                    res_seg["total_ressources_apres_immunisation_simple_annuel"] = r2(max(0.0, float(res_seg["total_ressources_avant_immunisation_simple_annuel"]) - immu_seg))
+
+                    taux_ris_ann_seg = float(res_seg.get("taux_ris_annuel", 0.0))
+                    ri_ann_seg = r2(max(0.0, taux_ris_ann_seg - float(res_seg["total_ressources_apres_immunisation_simple_annuel"])))
+                    res_seg["ris_theorique_annuel"] = float(ri_ann_seg)
+                    res_seg["ris_theorique_mensuel"] = float(r2(ri_ann_seg / 12.0))
+
+                    # Recalcul du montant du segment avec le nouveau RI mensuel
+                    # ⚠️ On garde le prorata déjà calculé dans s["prorata"]
+                    s["ris_mensuel"] = float(res_seg["ris_theorique_mensuel"])
+                    s["montant_segment"] = float(r2(float(s["ris_mensuel"]) * float(s.get("prorata", 0.0))))
+
+                seg_first["ris_1er_mois_total"] = float(r2(sum(float(s.get("montant_segment", 0.0)) for s in seg_first["segments"])))
+                seg_first["ris_mois_suivants"] = float(res_ms["ris_theorique_mensuel"])
+                seg_first["detail_mois_suivants"] = res_ms
 
                 # 2) On recalcule un résultat “mois suivants” en remplaçant les champs art34
                 #    (on garde le reste identique)
