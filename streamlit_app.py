@@ -1054,21 +1054,15 @@ def make_decision_pdf_cpas(
 
             lines = []
 
-            dbg1 = res_seg.get("debug_deg1") or {}
-            if dbg1:
-                ids = adv.get("deg1_ids", []) or []
-                if ids:
-                    lines.append("<b>Débiteurs 1er degré :</b>")
-                    for mid in ids:
-                        rm = _m_rev_m(mid)
-                        ex = max(0.0, rm - taux)
-                        nom = _m_name(mid)
-
-                        # Ligne 1 : revenu (ex: "1.600€ de pension légale")
-                        lines.append(f"— {euro(rm)} € : {nom}")
-
-                        # Ligne 2 : détail du calcul
-                        lines.append(f"  {euro(rm)} € − {euro(taux)} € = {euro(ex)} € à prendre en compte / mois")
+            ids = adv.get("deg1_ids", []) or []
+            if ids:
+                lines.append("<b>Débiteurs 1er degré :</b>")
+                for mid in ids:
+                    rm = _m_rev_m(mid)
+                    ex = max(0.0, rm - taux)
+                    nom = _m_name(mid)
+                    lines.append(f"— {nom} : {euro(rm)} €/mois")
+                    lines.append(f"  {euro(rm)} € − {euro(taux)} € = {euro(ex)} € à prendre en compte / mois")
 
                     #for mid in ids:
                         #rm = _m_rev_m(mid)
@@ -2152,6 +2146,12 @@ if multi_mode:
                     res_seg = s.get("_detail_res")
                     if not isinstance(res_seg, dict):
                         continue
+                    # Injecter les infos art.34 avancées dans CHAQUE segment (pour le PDF)
+                    res_seg["art34_mode"] = res_ms.get("art34_mode", "MENAGE_AVANCE")
+                    res_seg["art34_degree_utilise"] = res_ms.get("art34_degree_utilise", 0)
+                    res_seg["debug_deg1"] = res_ms.get("debug_deg1")
+                    res_seg["debug_deg2"] = res_ms.get("debug_deg2")
+                    res_seg["ris_injecte_mensuel"] = res_ms.get("ris_injecte_mensuel", 0.0)
 
                     # On applique le même override art.34 + recalcul RI
                     res_seg["cohabitants_part_a_compter_mensuel"] = res_ms["cohabitants_part_a_compter_mensuel"]
