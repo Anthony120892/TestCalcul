@@ -1442,24 +1442,51 @@ def make_decision_pdf_cpas(
         story.append(Spacer(1, 8))
 
     # ---- Corps PDF
-    if seg_first_month and seg_first_month.get("segments"):
-        for idx, s in enumerate(seg_first_month["segments"]):
-            res_seg = s.get("_detail_res") if isinstance(s.get("_detail_res"), dict) else res_mois_suivants
-            title_period = f"Du {date_fr(s['du'])} au {date_fr(s['au'])} :"
-            render_one_period(title_period, res_seg, s, seg_first_month)
-            if idx < len(seg_first_month["segments"]) - 1:
+    #if seg_first_month and seg_first_month.get("segments"):
+        #for idx, s in enumerate(seg_first_month["segments"]):
+            #res_seg = s.get("_detail_res") if isinstance(s.get("_detail_res"), dict) else res_mois_suivants
+            #title_period = f"Du {date_fr(s['du'])} au {date_fr(s['au'])} :"
+            #render_one_period(title_period, res_seg, s, seg_first_month)
+            #if idx < len(seg_first_month["segments"]) - 1:
                 story.append(PageBreak())
 
-        story.append(Paragraph(
-            f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
-            base
-        ))
-        story.append(Spacer(1, 8))
+        #story.append(Paragraph(
+            #f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
+            #base
+        #))
+        #story.append(Spacer(1, 8))
 
-        story.append(PageBreak())
-        render_one_period("Mois suivants (situation après dernier changement dans le mois) :", res_mois_suivants, None, None)
-    else:
-        render_one_period("Mois complet :", res_mois_suivants, None, None)
+        #story.append(PageBreak())
+        #render_one_period("Mois suivants (situation après dernier changement dans le mois) :", res_mois_suivants, None, None)
+    #else:
+        #render_one_period("Mois complet :", res_mois_suivants, None, None)
+# ---- Corps PDF
+
+if seg_first_month and seg_first_month.get("segments"):
+    for idx, s in enumerate(seg_first_month["segments"]):
+        res_seg = s.get("_detail_res") if isinstance(s.get("_detail_res"), dict) else res_mois_suivants
+        title_period = f"Du {date_fr(s['du'])} au {date_fr(s['au'])} :"
+        render_one_period(title_period, res_seg, s, seg_first_month)
+        if idx < len(seg_first_month["segments"]) - 1:
+            story.append(PageBreak())
+
+    # Total du 1er mois
+    story.append(Paragraph(
+        f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
+        base
+    ))
+    story.append(Spacer(1, 6))
+
+    # ✅ Ligne synthèse "mois suivants" (sans refaire tout un calcul détaillé en 2e partie)
+    ris_ms = float(seg_first_month.get("ris_mois_suivants", 0.0))
+    ref_ms = seg_first_month.get("reference_mois_suivants", "")
+    story.append(Paragraph(
+        f"<b>Montant total à partir du mois suivant :</b> {euro(ris_ms)} € / mois"
+        + (f" <font size=9 color='grey'>(référence : {date_fr(ref_ms)})</font>" if ref_ms else ""),
+        base
+    ))
+else:
+    render_one_period("Mois complet :", res_mois_suivants, None, None)
 
     story.append(Spacer(1, 10))
     story.append(Paragraph("Document généré automatiquement — à valider selon la décision du CPAS.", small))
