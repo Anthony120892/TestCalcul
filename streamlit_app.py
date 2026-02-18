@@ -1657,9 +1657,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
                 "exclure": bool(excl),
                 "date_quitte_menage": str(dq) if isinstance(dq, date) else None
             })
-    else:
-        st.markdown("### Cohabitants admissibles (art.34) — mode simple")
-        st.info("Masqué car **Ménage avancé** activé (art.34 géré via Membres & débiteurs).")
 
     answers["cohabitants_art34"] = cohabitants
     answers["pf_links"] = pf_links
