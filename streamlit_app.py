@@ -1666,6 +1666,16 @@ if multi_mode:
             st.caption("Dossier couple : indisponible en ménage avancé (multi-demande).")
         else:
             is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
+        # ✅ Couple autorisé UNIQUEMENT en ménage avancé
+        if advanced_household:
+            is_couple = st.checkbox(
+                "Dossier COUPLE (2 demandeurs ensemble)",
+                value=False,
+                key=f"hd_couple_{i}"
+            )
+        else:
+            is_couple = False
+            st.caption("Dossier couple : disponible uniquement en ménage avancé.")
 
         demandeur2_nom = ""
         if is_couple:
@@ -1704,13 +1714,14 @@ if multi_mode:
             "idx": i,
             "label": label,
             "demandeur_nom": str(demandeur_nom).strip(),
-            "demandeur2_nom": str(demandeur2_nom).strip(),
+            "demandeur2_nom": str(demandeur2_nom).strip() if (advanced_household and is_couple) else "",
             "categorie": cat,
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
-            "couple_demandeur": bool(is_couple),
+            #"couple_demandeur": bool(is_couple),
+            "couple_demandeur": bool(is_couple) if advanced_household else False,
             "revenus_demandeur_annuels": rev1,
-            "revenus_conjoint_annuels": rev2,
+            "revenus_conjoint_annuels": rev2 if (advanced_household and is_couple) else [],
             "prestations_familiales_a_compter_mensuel": float(pf_m),
             "share_art34": bool(share_art34),
             "art34_deg1_ids": [],
