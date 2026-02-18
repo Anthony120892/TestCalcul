@@ -925,14 +925,6 @@ def compute_first_month_segments(answers: dict, engine: dict) -> dict:
 
 # ============================================================
 # PDF — VERSION "CPAS"
-#   ✅ Ajouts demandés:
-#     - Nom du demandeur dans le PDF
-#     - Rubriques: ressources propres (demandeur) + ressources cohabitants (par cohabitant)
-#     - Synthèse: demandeur + cohabitants + total, puis immunisation
-#     - Détails capitaux (tranches) + immobilier (par bien) + cession (par tranches aussi)
-#   ✅ NOUVEAU (ta demande ici):
-#     - Logo CPAS coin supérieur gauche (OK)
-#     - Titre aligné AU MÊME NIVEAU que le logo + plus grand (OK)
 # ============================================================
 def euro(x: float) -> str:
     x = float(x or 0.0)
@@ -946,7 +938,8 @@ def date_fr(iso: str) -> str:
         return f"{d}/{m}/{y}"
     except Exception:
         return str(iso)
-        
+
+
 def cat_label(cat: str) -> str:
     cat = (cat or "").strip().lower()
     mapping = {
@@ -955,6 +948,7 @@ def cat_label(cat: str) -> str:
         "fam_charge": "Famille à charge",
     }
     return mapping.get(cat, cat)
+
 
 def _safe(s) -> str:
     return (s or "").replace("\n", " ").strip()
@@ -997,7 +991,6 @@ def make_decision_pdf_cpas(
     cell_small = ParagraphStyle("cell_small", parent=base, fontSize=8.6, leading=10.6)
     small = ParagraphStyle("small", parent=base, fontSize=9, leading=12, textColor=colors.grey)
 
-    # ✅ Titre plus grand
     h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=20, leading=22, spaceAfter=6)
     h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=14, spaceBefore=10, spaceAfter=4)
     h3 = ParagraphStyle("h3", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=10.5, leading=13, spaceBefore=6, spaceAfter=2)
@@ -1006,7 +999,7 @@ def make_decision_pdf_cpas(
 
     # Header
     logo_elem = None
-    logo_h = 3.2 * cm  # ✅ logo bien "bloc" en haut à gauche
+    logo_h = 3.2 * cm
     logo_w = 4.2 * cm
     if logo_path and os.path.exists(logo_path):
         logo_elem = Image(logo_path, width=logo_w, height=logo_h)
@@ -1021,44 +1014,21 @@ def make_decision_pdf_cpas(
     if demandeur_nom:
         header_data.append(["", Paragraph(f"Demandeur : <b>{demandeur_nom}</b>", base)])
 
-    # ✅ Row height = hauteur logo, pour aligner verticalement le titre "au même niveau"
-    first_row_h = logo_h if logo_elem else None
-    row_heights = [first_row_h] + [None] * (len(header_data) - 1)
-
-   #header_tbl = Table(header_data, colWidths=[logo_w + 0.2*cm, 16.2*cm - (logo_w + 0.2*cm)], rowHeights=row_heights)
-    #header_tbl.setStyle(TableStyle([
-        #("VALIGN", (0, 0), (-1, -1), "TOP"),       # logo collé en haut
-        #("VALIGN", (1, 0), (1, 0), "MIDDLE"),    # ✅ titre aligné verticalement sur le logo
-        #("VALIGN", (0, 1), (-1, -1), "TOP"),
-        #("LEFTPADDING", (0, 0), (-1, -1), 0),
-        #("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        #("TOPPADDING", (0, 0), (-1, -1), 0),
-        #("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-    #]))
     header_tbl = Table(header_data, colWidths=[3.2*cm, 13.0*cm])
     header_tbl.setStyle(TableStyle([
-    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
 
-    # paddings généraux (comme tu as déjà)
-    ("LEFTPADDING", (0, 0), (-1, -1), 0),
-    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-    ("TOPPADDING", (0, 0), (-1, -1), 0),
-    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
 
-    # ✅ décalage du logo seulement (cellule 0,0)
-    ("LEFTPADDING", (0, 0), (0, 0), -35),  # mets -6, -10, -15 selon le rendu
-    ("TOPPADDING",  (0, 0), (0, 0), -20),  # idem: -4, -8, -12
-]))
+        ("LEFTPADDING", (0, 0), (0, 0), -35),
+        ("TOPPADDING",  (0, 0), (0, 0), -20),
+    ]))
 
     story.append(header_tbl)
     story.append(Spacer(1, 8))
-
-    # Meta
-    #story.append(Paragraph(
-        #f"Catégorie : <b>{res_mois_suivants.get('categorie','')}</b> — "
-        #f"Taux RI annuel (référence) : <b>{euro(res_mois_suivants.get('taux_ris_annuel',0))} €</b>",
-        #base
-    #))
 
     story.append(Paragraph(
         f"Catégorie : <b>{cat_label(res_mois_suivants.get('categorie',''))}</b> — "
@@ -1456,27 +1426,6 @@ def make_decision_pdf_cpas(
         render_ri_block(res_seg, seg_info, seg_all)
         story.append(Spacer(1, 8))
 
-    # ---- Corps PDF
-    #if seg_first_month and seg_first_month.get("segments"):
-        #for idx, s in enumerate(seg_first_month["segments"]):
-            #res_seg = s.get("_detail_res") if isinstance(s.get("_detail_res"), dict) else res_mois_suivants
-            #title_period = f"Du {date_fr(s['du'])} au {date_fr(s['au'])} :"
-            #render_one_period(title_period, res_seg, s, seg_first_month)
-            #if idx < len(seg_first_month["segments"]) - 1:
-                #story.append(PageBreak())
-
-        #story.append(Paragraph(
-            #f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
-            #base
-        #))
-        #story.append(Spacer(1, 8))
-
-        #story.append(PageBreak())
-        #render_one_period("Mois suivants (situation après dernier changement dans le mois) :", res_mois_suivants, None, None)
-    #else:
-        #render_one_period("Mois complet :", res_mois_suivants, None, None)
-# ---- Corps PDF
-
     if seg_first_month and seg_first_month.get("segments"):
         for idx, s in enumerate(seg_first_month["segments"]):
             res_seg = s.get("_detail_res") if isinstance(s.get("_detail_res"), dict) else res_mois_suivants
@@ -1485,21 +1434,14 @@ def make_decision_pdf_cpas(
             if idx < len(seg_first_month["segments"]) - 1:
                 story.append(PageBreak())
 
-    # Total du 1er mois
         story.append(Paragraph(
             f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
             base
         ))
         story.append(Spacer(1, 6))
 
-    # ✅ Ligne synthèse "mois suivants" (sans refaire tout un calcul détaillé en 2e partie)
         ris_ms = float(seg_first_month.get("ris_mois_suivants", 0.0))
         ref_ms = seg_first_month.get("reference_mois_suivants", "")
-        #story.append(Paragraph(
-            #f"<b>Montant total à partir du mois suivant :</b> {euro(ris_ms)} € / mois"
-            #+ (f" <font size=9 color='grey'>(référence : {date_fr(ref_ms)})</font>" if ref_ms else ""),
-            #base
-        #))
         story.append(Paragraph(
             f"<b>Montant total à partir du mois suivant :</b> {euro(ris_ms)} € / mois "
             f"(<font size=9 color='grey'>= {euro(ris_ms*12)} € / an</font>)"
@@ -1812,6 +1754,13 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
 
 
 # ============================================================
+# ✅ AJOUT (préremplissage ménage avancé): helper revenu annuel
+# ============================================================
+def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> float:
+    return float(revenus_annuels_apres_exonerations(rev_list or [], cfg_soc, cfg_ale))
+
+
+# ============================================================
 # MODE DOSSIER (SINGLE / MULTI)
 # ============================================================
 st.subheader("Mode dossier")
@@ -1835,7 +1784,6 @@ if multi_mode:
         demandeur_nom = st.text_input("Nom du demandeur", value="", key=f"hd_dem_nom_{i}")
 
         label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
-        #cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
 
         cat = st.selectbox(
             "Catégorie RIS",
@@ -1848,6 +1796,11 @@ if multi_mode:
         d_dem = st.date_input("Date de demande", value=date.today(), key=f"hd_date_{i}")
 
         is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
+
+        # ✅ AJOUT: nom du demandeur 2 (si couple)
+        demandeur2_nom = ""
+        if is_couple:
+            demandeur2_nom = st.text_input("Nom du demandeur 2 (conjoint)", value="", key=f"hd_dem2_nom_{i}")
 
         st.markdown("**Revenus nets (demandeur 1)**")
         rev1 = ui_revenus_block(f"hd_rev1_{i}")
@@ -1876,6 +1829,7 @@ if multi_mode:
             "idx": i,
             "label": label,
             "demandeur_nom": str(demandeur_nom).strip(),
+            "demandeur2_nom": str(demandeur2_nom).strip(),  # ✅ AJOUT
             "categorie": cat,
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
@@ -1909,10 +1863,47 @@ if multi_mode:
     if advanced_household:
         st.divider()
         st.subheader("C) Ménage avancé — Membres & débiteurs (art.34)")
-        nb_m = st.number_input("Nombre de membres (débit. potentiels) à encoder", min_value=0, value=3, step=1)
+
+        # ✅ AJOUT: préremplissage des demandeurs
+        st.caption("Préremplissage : les demandeurs (et conjoints si couple) sont ajoutés automatiquement. Tu ajoutes ici uniquement les autres membres du ménage.")
+        prefill_demandeurs = st.checkbox("Préremplir les demandeurs dans la liste des membres", value=True, key="prefill_dem")
+        inclure_demandeurs_comme_debiteurs = st.checkbox("Permettre de sélectionner aussi les demandeurs comme débiteurs", value=True, key="dem_as_debtors")
+
         members = []
-        for j in range(int(nb_m)):
-            st.markdown(f"**Membre {j+1}**")
+
+        # 1) Membres = demandeurs (si activé)
+        if prefill_demandeurs:
+            for d in dossiers:
+                # Demandeur 1
+                id1 = f"D{d['idx']+1}A"
+                name1 = (d.get("demandeur_nom") or "").strip() or f"Demandeur D{d['idx']+1}A"
+                rev1_ann = annual_from_revenus_list(d.get("revenus_demandeur_annuels", []), cfg["socio_prof"], cfg["ale"])
+                members.append({
+                    "id": id1,
+                    "name": name1,
+                    "revenu_net_annuel": float(rev1_ann),
+                    "exclure": False,
+                    "_source": "demandeur"
+                })
+
+                # Demandeur 2 (si couple)
+                if bool(d.get("couple_demandeur", False)):
+                    id2 = f"D{d['idx']+1}B"
+                    name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
+                    rev2_ann = annual_from_revenus_list(d.get("revenus_conjoint_annuels", []), cfg["socio_prof"], cfg["ale"])
+                    members.append({
+                        "id": id2,
+                        "name": name2,
+                        "revenu_net_annuel": float(rev2_ann),
+                        "exclure": False,
+                        "_source": "demandeur"
+                    })
+
+        # 2) Encoder uniquement les autres membres
+        nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=3, step=1, key="nb_autres_membres")
+
+        for j in range(int(nb_autres)):
+            st.markdown(f"**Autre membre {j+1}**")
             c1, c2, c3 = st.columns([2, 1, 1])
             mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
             name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
@@ -1922,12 +1913,22 @@ if multi_mode:
                 "id": str(mid).strip(),
                 "name": str(name).strip(),
                 "revenu_net_annuel": float(rev_annuel),
-                "exclure": bool(excl)
+                "exclure": bool(excl),
+                "_source": "autre"
             }
             if m["id"]:
                 members.append(m)
 
-        members_by_id = {m["id"]: m for m in members if not m.get("exclure", False)}
+        # 3) Construire members_by_id (et option: retirer les demandeurs des débiteurs)
+        members_by_id = {}
+        for m in members:
+            if m.get("exclure", False):
+                continue
+            if (not inclure_demandeurs_comme_debiteurs) and m.get("_source") == "demandeur":
+                continue
+            if m.get("id"):
+                members_by_id[m["id"]] = m
+
         household = {"members": members, "members_by_id": members_by_id}
         ids_available = list(members_by_id.keys())
 
@@ -2145,7 +2146,6 @@ else:
 
     answers["demandeur_nom"] = st.text_input("Nom du demandeur", value="")
 
-    #answers["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"])
     cat_choice = st.selectbox(
         "Catégorie RIS",
         options=["cohab", "isole", "fam_charge"],
