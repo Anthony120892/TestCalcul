@@ -1030,6 +1030,49 @@ def make_decision_pdf_cpas(
 
         story.append(bullets(active_info) if active_info else Paragraph("Aucun cohabitant encodé.", base))
 
+        # ✅ Si pas de cohabitants "mode simple", mais art.34 avancé -> on détaille via household + debug
+        adv = answers_snapshot.get("_advanced_household_pdf") or None
+        if (not (cohabitants or [])) and adv and float(res_seg.get("cohabitants_part_a_compter_mensuel", 0.0)) > 0:
+            members_by_id = adv.get("members_by_id", {}) or {}
+            taux = float(adv.get("taux_a_laisser_mensuel", 0.0))
+
+            def _m_name(mid: str) -> str:
+                m = members_by_id.get(mid, {}) or {}
+                return (m.get("name") or mid).strip()
+
+            def _m_rev_m(mid: str) -> float:
+                m = members_by_id.get(mid, {}) or {}
+                return float(m.get("revenu_net_annuel", 0.0)) / 12.0
+
+            lines = []
+
+            dbg1 = res_seg.get("debug_deg1") or {}
+            if dbg1:
+                ids = adv.get("deg1_ids", []) or []
+                if ids:
+                    lines.append("<b>Débiteurs 1er degré :</b>")
+                    for mid in ids:
+                        rm = _m_rev_m(mid)
+                        ex = max(0.0, rm - taux)
+                        lines.append(f"— {_m_name(mid)} : {euro(rm)} − {euro(taux)} = {euro(ex)} €/mois")
+                    lines.append(f"Total débiteurs 1er degré pris en compte : <b>{euro(float(dbg1.get('pris_en_compte_m',0)))} €</b> / mois")
+
+            dbg2 = res_seg.get("debug_deg2") or {}
+            if dbg2:
+                ids = adv.get("deg2_ids", []) or []
+                if ids:
+                    lines.append("<b>Débiteurs 2e degré :</b>")
+                    for mid in ids:
+                        rm = _m_rev_m(mid)
+                        ex = max(0.0, rm - taux)
+                        lines.append(f"— {_m_name(mid)} : {euro(rm)} − {euro(taux)} = {euro(ex)} €/mois")
+                    lines.append(f"Total débiteurs 2e degré pris en compte : <b>{euro(float(dbg2.get('pris_en_compte_m',0)))} €</b> / mois")
+
+            lines.append(f"Total cohabitants compté : {euro(float(res_seg.get('cohabitants_part_a_compter_mensuel',0)))} € × 12 = {euro(float(res_seg.get('cohabitants_part_a_compter_annuel',0)))} €")
+            story.append(bullets(lines))
+            return
+
+
         taux = float(res_seg.get("taux_a_laisser_mensuel", 0.0))
         part_m = float(res_seg.get("cohabitants_part_a_compter_mensuel", 0.0))
         part_ann = float(res_seg.get("cohabitants_part_a_compter_annuel", 0.0))
@@ -1933,6 +1976,25 @@ if multi_mode:
                 "revenus_conjoint_annuels": d.get("revenus_conjoint_annuels", []),
                 "prestations_familiales_a_compter_mensuel": float(d.get("prestations_familiales_a_compter_mensuel", 0.0)),
             })
+
+            # ✅ Pour que le PDF puisse détailler l’art.34 en ménage avancé (version safe)
+        if advanced_household:
+            members_by_id = household.get("members_by_id", {}) or {}
+            deg1_ids = list(d.get("art34_deg1_ids", []) or [])
+            deg2_ids = list(d.get("art34_deg2_ids", []) or [])
+
+            # mini mapping id -> label (évite d’embarquer tout l’objet)
+            id_to_label = {mid: (members_by_id.get(mid, {}) or {}).get("label", str(mid)) for mid in (deg1_ids + deg2_ids)}
+
+            answers["_advanced_household_pdf"] = {
+                "deg1_ids": deg1_ids,
+                "deg2_ids": deg2_ids,
+                "id_to_label": id_to_label,
+                "taux_a_laisser_mensuel": float(taux_art34),
+            }
+        else:
+            answers["_advanced_household_pdf"] = None
+
 
             # --- si patrimoine perso activé : on l’ajoute pour PDF + (option) calcul ---
             # Ici, on le met dans answers_snapshot uniquement pour l’affichage détaillé PDF.
