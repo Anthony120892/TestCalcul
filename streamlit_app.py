@@ -1480,11 +1480,18 @@ def make_decision_pdf_cpas(
     # ✅ Ligne synthèse "mois suivants" (sans refaire tout un calcul détaillé en 2e partie)
         ris_ms = float(seg_first_month.get("ris_mois_suivants", 0.0))
         ref_ms = seg_first_month.get("reference_mois_suivants", "")
+        #story.append(Paragraph(
+            #f"<b>Montant total à partir du mois suivant :</b> {euro(ris_ms)} € / mois"
+            #+ (f" <font size=9 color='grey'>(référence : {date_fr(ref_ms)})</font>" if ref_ms else ""),
+            #base
+        #))
         story.append(Paragraph(
-            f"<b>Montant total à partir du mois suivant :</b> {euro(ris_ms)} € / mois"
+            f"<b>Montant total à partir du mois suivant :</b> {euro(ris_ms)} € / mois "
+            f"(<font size=9 color='grey'>= {euro(ris_ms*12)} € / an</font>)"
             + (f" <font size=9 color='grey'>(référence : {date_fr(ref_ms)})</font>" if ref_ms else ""),
             base
         ))
+
     else:
         render_one_period("Mois complet :", res_mois_suivants, None, None)
 
