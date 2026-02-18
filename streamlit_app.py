@@ -516,9 +516,23 @@ def make_pool_key(ids: list) -> str:
     return f"ids[{a}]"
 
 def art34_group_excess_m(debtors: list, taux: float, extra_income_m: float = 0.0) -> float:
-    n = len(debtors)
-    s = sum(max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0 for d in debtors) + max(0.0, float(extra_income_m))
-    return r2(max(0.0, s - (n * float(taux))))
+    """
+    Art.34 (ménage avancé) — déduction INDIVIDUELLE :
+    somme des max(0, revenu_m - taux) pour chaque débiteur.
+    (=> correspond à ce que tu affiches dans le PDF)
+    """
+    t = float(taux)
+    total_excedent = 0.0
+
+    for d in (debtors or []):
+        rm = max(0.0, float(d.get("revenu_net_annuel", 0.0))) / 12.0
+        total_excedent += max(0.0, rm - t)
+
+    # injections (RI d'autres dossiers) : on les ajoute comme un "plus" (sans déduction)
+    total_excedent += max(0.0, float(extra_income_m))
+
+    return r2(total_excedent)
+
 
 def art34_draw_from_pool(degree: int,
                          debtor_ids: list,
