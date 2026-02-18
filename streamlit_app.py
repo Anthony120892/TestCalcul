@@ -1820,7 +1820,7 @@ multi_mode = st.checkbox("Plusieurs demandes RIS — comparer / calculer un mén
 if multi_mode:
     st.subheader("Choix du mode multi")
     advanced_household = st.checkbox(
-        "Ménage avancé (feuilles CPAS) : priorité + pools + injections RI",
+        "Ménage avancé (exemple : Parents et enfants qui font l'objet de la demande)",
         value=True
     )
 
@@ -1832,7 +1832,7 @@ if multi_mode:
     for i in range(int(nb_dem)):
         st.markdown(f"### Dossier {i+1}")
 
-        demandeur_nom = st.text_input("Nom du demandeur (pour le PDF)", value="", key=f"hd_dem_nom_{i}")
+        demandeur_nom = st.text_input("Nom du demandeur", value="", key=f"hd_dem_nom_{i}")
 
         label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
         #cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
@@ -1867,7 +1867,7 @@ if multi_mode:
         )
 
         share_art34 = st.checkbox(
-            "Enfant/Jeune demandeur : partager la part art.34 avec les autres dossiers marqués",
+            "Enfants/Jeunes demandeurs (ménage avancé)",
             value=False,
             key=f"hd_share_{i}"
         )
@@ -2143,7 +2143,7 @@ else:
 
     st.subheader("Profil")
 
-    answers["demandeur_nom"] = st.text_input("Nom du demandeur (pour le PDF)", value="")
+    answers["demandeur_nom"] = st.text_input("Nom du demandeur", value="")
 
     #answers["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"])
     cat_choice = st.selectbox(
