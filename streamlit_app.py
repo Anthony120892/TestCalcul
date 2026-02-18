@@ -1978,22 +1978,22 @@ if multi_mode:
             })
 
             # ✅ Pour que le PDF puisse détailler l’art.34 en ménage avancé (version safe)
-        if advanced_household:
-            members_by_id = household.get("members_by_id", {}) or {}
-            deg1_ids = list(d.get("art34_deg1_ids", []) or [])
-            deg2_ids = list(d.get("art34_deg2_ids", []) or [])
+            if advanced_household:
+                members_by_id = household.get("members_by_id", {}) or {}
+                deg1_ids = list(d.get("art34_deg1_ids", []) or [])
+                deg2_ids = list(d.get("art34_deg2_ids", []) or [])
 
-            # mini mapping id -> label (évite d’embarquer tout l’objet)
-            id_to_label = {mid: (members_by_id.get(mid, {}) or {}).get("label", str(mid)) for mid in (deg1_ids + deg2_ids)}
+                # mini mapping id -> label (évite d’embarquer tout l’objet)
+                id_to_label = {mid: (members_by_id.get(mid, {}) or {}).get("label", str(mid)) for mid in (deg1_ids + deg2_ids)}
 
-            answers["_advanced_household_pdf"] = {
-                "deg1_ids": deg1_ids,
-                "deg2_ids": deg2_ids,
-                "id_to_label": id_to_label,
-                "taux_a_laisser_mensuel": float(taux_art34),
-            }
-        else:
-            answers["_advanced_household_pdf"] = None
+                answers["_advanced_household_pdf"] = {
+                    "deg1_ids": deg1_ids,
+                    "deg2_ids": deg2_ids,
+                    "id_to_label": id_to_label,
+                    "taux_a_laisser_mensuel": float(taux_art34),
+                }
+            else:
+                answers["_advanced_household_pdf"] = None
 
 
             # --- si patrimoine perso activé : on l’ajoute pour PDF + (option) calcul ---
