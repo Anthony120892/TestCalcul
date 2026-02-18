@@ -1607,7 +1607,7 @@ def ui_revenus_block(prefix: str) -> list:
     lst = []
     nb = st.number_input(f"Nombre de revenus à encoder", min_value=0, value=1, step=1, key=f"{prefix}_nb")
     for i in range(int(nb)):
-        st.markdown(f"**Revenu {i+1} ({prefix})**")
+        st.markdown(f"**Revenu {i+1}**")
         c1, c2, c3 = st.columns([2, 1, 1])
 
         label = c1.text_input("Type/label", value="salaire/chômage", key=f"{prefix}_lab_{i}")
