@@ -1835,7 +1835,15 @@ if multi_mode:
         demandeur_nom = st.text_input("Nom du demandeur (pour le PDF)", value="", key=f"hd_dem_nom_{i}")
 
         label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
-        cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
+        #cat = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"], key=f"hd_cat_{i}")
+
+        cat = st.selectbox(
+            "Catégorie RIS",
+            options=["cohab", "isole", "fam_charge"],
+            format_func=cat_label,
+            key=f"hd_cat_{i}"
+        )
+
         enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"hd_enf_{i}")
         d_dem = st.date_input("Date de demande", value=date.today(), key=f"hd_date_{i}")
 
@@ -2137,7 +2145,14 @@ else:
 
     answers["demandeur_nom"] = st.text_input("Nom du demandeur (pour le PDF)", value="")
 
-    answers["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"])
+    #answers["categorie"] = st.selectbox("Catégorie RIS", ["cohab", "isole", "fam_charge"])
+    cat_choice = st.selectbox(
+        "Catégorie RIS",
+        options=["cohab", "isole", "fam_charge"],
+        format_func=cat_label
+    )
+    answers["categorie"] = cat_choice
+
     answers["enfants_a_charge"] = st.number_input("Enfants à charge", min_value=0, value=0, step=1)
 
     st.divider()
