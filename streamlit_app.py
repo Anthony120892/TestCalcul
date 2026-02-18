@@ -1920,14 +1920,22 @@ if multi_mode:
                 members.append(m)
 
         # 3) Construire members_by_id (et option: retirer les demandeurs des débiteurs)
+        #members_by_id = {}
+        #for m in members:
+            #if m.get("exclure", False):
+                #continue
+            #if (not inclure_demandeurs_comme_debiteurs) and m.get("_source") == "demandeur":
+                #continue
+            #if m.get("id"):
+                #members_by_id[m["id"]] = m
+        
         members_by_id = {}
         for m in members:
             if m.get("exclure", False):
                 continue
-            if (not inclure_demandeurs_comme_debiteurs) and m.get("_source") == "demandeur":
-                continue
             if m.get("id"):
                 members_by_id[m["id"]] = m
+
 
         household = {"members": members, "members_by_id": members_by_id}
         ids_available = list(members_by_id.keys())
@@ -1937,12 +1945,20 @@ if multi_mode:
         for d in dossiers:
             st.markdown(f"### {d['label']} — art.34")
             c1, c2 = st.columns(2)
+            #d["art34_deg1_ids"] = c1.multiselect(
+                #"Débiteurs 1er degré",
+                #options=ids_available,
+                #default=[],
+                #key=f"d_{d['idx']}_deg1"
+            #)
             d["art34_deg1_ids"] = c1.multiselect(
                 "Débiteurs 1er degré",
                 options=ids_available,
+                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=[],
                 key=f"d_{d['idx']}_deg1"
             )
+
             d["art34_deg2_ids"] = c2.multiselect(
                 "Débiteurs 2e degré",
                 options=ids_available,
