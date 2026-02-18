@@ -1664,12 +1664,11 @@ if multi_mode:
             key=f"hd_pf_{i}"
         )
 
-        # ✅ Patrimoine perso : seulement si multi ET NON ménage avancé
+        # ✅ Patrimoine perso : disponible AUSSI en ménage avancé
         patrimoine_perso = {"enabled": False, "dem1": {"capitaux": 0.0, "biens": [], "cessions": [], "avn_m": 0.0}, "dem2": None}
-        if (not advanced_household):
-            with st.expander("Patrimoine & ressources personnels (optionnel)", expanded=False):
-                st.caption("N'apparaît que dans la demande multiple (mode simple).")
-                patrimoine_perso = ui_patrimoine_personnel(prefix=f"pp_{i}", is_couple=is_couple)
+        with st.expander("Patrimoine & ressources personnels (par dossier)", expanded=False):
+            st.caption("Ajoute ici ce qui est propre au(x) demandeur(s) de CE dossier (en plus du ménage commun).")
+            patrimoine_perso = ui_patrimoine_personnel(prefix=f"pp_{i}", is_couple=is_couple)
 
         share_art34 = False
         if advanced_household:
@@ -1831,16 +1830,24 @@ if multi_mode:
                     "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
                 })
 
-                # Multi simple (NON ménage avancé) => ajouter patrimoine perso au ménage commun
-                if (not advanced_household) and bool(d.get("patrimoine_perso_enabled", False)):
+                # ✅ Ajouter patrimoine perso au dossier (DISPO en mode simple ET ménage avancé)
+                if bool(d.get("patrimoine_perso_enabled", False)):
                     p1 = d.get("patrimoine_perso_dem1", {}) or {}
                     p2 = d.get("patrimoine_perso_dem2", None)
 
-                    answers["capital_mobilier_total"] = float(answers.get("capital_mobilier_total", 0.0)) + float(p1.get("capitaux", 0.0)) + float((p2 or {}).get("capitaux", 0.0))
-                    answers["biens_immobiliers"] = (answers.get("biens_immobiliers", []) or []) + (p1.get("biens", []) or []) + (((p2 or {}).get("biens", [])) or [])
-                    answers["cessions"] = (answers.get("cessions", []) or []) + (p1.get("cessions", []) or []) + (((p2 or {}).get("cessions", [])) or [])
-                    answers["avantage_nature_logement_mensuel"] = float(answers.get("avantage_nature_logement_mensuel", 0.0)) + float(p1.get("avn_m", 0.0)) + float((p2 or {}).get("avn_m", 0.0))
+                    answers["capital_mobilier_total"] = float(answers.get("capital_mobilier_total", 0.0)) \
+                        + float(p1.get("capitaux", 0.0)) + float((p2 or {}).get("capitaux", 0.0))
 
+                    answers["biens_immobiliers"] = (answers.get("biens_immobiliers", []) or []) \
+                        + (p1.get("biens", []) or []) + (((p2 or {}).get("biens", [])) or [])
+
+                    answers["cessions"] = (answers.get("cessions", []) or []) \
+                        + (p1.get("cessions", []) or []) + (((p2 or {}).get("cessions", [])) or [])
+
+                    answers["avantage_nature_logement_mensuel"] = float(answers.get("avantage_nature_logement_mensuel", 0.0)) \
+                        + float(p1.get("avn_m", 0.0)) + float((p2 or {}).get("avn_m", 0.0))
+
+                    # pour affichage PDF (déjà géré dans make_decision_pdf_cpas)
                     answers["_patrimoine_perso_pdf"] = {"dem1": p1, "dem2": p2 if d.get("couple_demandeur") else None}
 
                 # Ménage avancé : art34 avancé + injection
