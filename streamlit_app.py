@@ -2169,8 +2169,8 @@ else:
     answers["revenus_conjoint_annuels"] = []
     if answers["couple_demandeur"]:
         st.divider()
-        st.markdown("**Demandeur 2 (conjoint/partenaire) — revenus à additionner**")
-        answers["revenus_conjoint_annuels"] = ui_revenus_block("conj")
+        st.markdown("**Demandeur 2 (conjoint/partenaire)**")
+        answers["revenus_conjoint_annuels"] = ui_revenus_block("conjoint/partenaire")
 
     st.divider()
     st.subheader("PF à compter (spécifiques au demandeur)")
