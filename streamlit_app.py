@@ -1600,14 +1600,31 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
     st.divider()
     st.subheader("Ménage (commun)")
 
-    answers["partage_enfants_jeunes_actif"] = st.checkbox(
-        "Partager la part entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
-        value=False,
-        key=f"{prefix}_partage"
-    )
+    #answers["partage_enfants_jeunes_actif"] = st.checkbox(
+        #"Partager la part entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
+        #value=False,
+        #ey=f"{prefix}_partage"
+    #)
+    #answers["nb_enfants_jeunes_demandeurs"] = 1
+    #if answers["partage_enfants_jeunes_actif"]:
+        #answers["nb_enfants_jeunes_demandeurs"] = st.number_input(
+    # ✅ Partage art.34 (MODE SIMPLE uniquement)
+    answers["partage_enfants_jeunes_actif"] = False
     answers["nb_enfants_jeunes_demandeurs"] = 1
-    if answers["partage_enfants_jeunes_actif"]:
-        answers["nb_enfants_jeunes_demandeurs"] = st.number_input(
+
+    if show_simple_art34 and nb_demandeurs > 1:
+        answers["partage_enfants_jeunes_actif"] = st.checkbox(
+            "Partager la part entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
+            value=False,
+            key=f"{prefix}_partage"
+        )
+        if answers["partage_enfants_jeunes_actif"]:
+            answers["nb_enfants_jeunes_demandeurs"] = st.number_input(
+                "Nombre de demandeurs à partager",
+                min_value=1, value=max(2, nb_demandeurs), step=1,
+                key=f"{prefix}_nb_partage"
+            )
+
             "Nombre de demandeurs à partager",
             min_value=1, value=max(2, nb_demandeurs), step=1,
             key=f"{prefix}_nb_partage"
