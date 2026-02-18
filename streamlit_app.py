@@ -115,7 +115,7 @@ def next_day(d: date) -> date:
 def date_in_same_month(d: date, ref: date) -> bool:
     return d.year == ref.year and d.month == ref.month
 
-def safe_parse_date(x) -> date | None:
+def safe_parse_date(x):
     if isinstance(x, date):
         return x
     if isinstance(x, str) and x.strip():
@@ -605,7 +605,7 @@ def compute_art34_menage_avance(dossier: dict,
 # ============================================================
 # CALCUL GLOBAL — OFFICIEL CPAS (ANNUEL puis /12)
 # ============================================================
-def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of: date | None = None) -> dict:
+def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of=None) -> dict:
     cfg = engine["config"]
     cat = answers.get("categorie", "isole")
 
@@ -820,7 +820,7 @@ def make_decision_pdf_cpas(
     dossier_label: str,
     answers_snapshot: dict,
     res_mois_suivants: dict,
-    seg_first_month: dict | None = None,
+    seg_first_month=None,
     logo_path: str = "logo.png",
     cfg_soc: dict | None = None,
     cfg_ale: dict | None = None,
@@ -1574,7 +1574,7 @@ def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> fl
     return float(revenus_annuels_apres_exonerations(rev_list or [], cfg_soc, cfg_ale))
 
 # ============================================================
-# ✅ UI Patrimoine personnel (multi SIMPLE)
+# ✅ UI Patrimoine personnel (par dossier) — utilisable en multi
 # ============================================================
 def ui_patrimoine_personnel(prefix: str, is_couple: bool) -> dict:
     out = {"enabled": False, "dem1": {"capitaux": 0.0, "biens": [], "cessions": [], "avn_m": 0.0}, "dem2": None}
@@ -1614,7 +1614,12 @@ if multi_mode:
         value=True
     )
 
-    nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
+    # ✅ CHANGEMENT: autoriser 1 dossier (ex: un couple = 1 dossier)
+    nb_dem = st.number_input(
+        "Nombre de dossiers/demandes à calculer",
+        min_value=1, max_value=4, value=1, step=1
+    )
+    st.caption("Exemple : 1 dossier peut représenter un couple (2 personnes, 1 seul dossier).")
 
     # A) Dossiers
     st.subheader("A) Dossiers / demandes")
@@ -1636,12 +1641,8 @@ if multi_mode:
         enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"hd_enf_{i}")
         d_dem = st.date_input("Date de demande", value=date.today(), key=f"hd_date_{i}")
 
-        # ✅ Couple: autorisé uniquement en ménage avancé (comme tu l'avais indiqué plus bas)
-        if advanced_household:
-            is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
-        else:
-            is_couple = False
-            st.caption("Dossier couple : disponible uniquement en ménage avancé.")
+        # ✅ CHANGEMENT: couple disponible UNIQUEMENT ici (multi), peu importe advanced_household
+        is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
 
         demandeur2_nom = ""
         if is_couple:
@@ -1664,7 +1665,7 @@ if multi_mode:
             key=f"hd_pf_{i}"
         )
 
-        # ✅ Patrimoine perso : disponible AUSSI en ménage avancé
+        # ✅ Patrimoine perso (par dossier) : dispo aussi en ménage avancé
         patrimoine_perso = {"enabled": False, "dem1": {"capitaux": 0.0, "biens": [], "cessions": [], "avn_m": 0.0}, "dem2": None}
         with st.expander("Patrimoine & ressources personnels (par dossier)", expanded=False):
             st.caption("Ajoute ici ce qui est propre au(x) demandeur(s) de CE dossier (en plus du ménage commun).")
@@ -1678,13 +1679,13 @@ if multi_mode:
             "idx": i,
             "label": label,
             "demandeur_nom": str(demandeur_nom).strip(),
-            "demandeur2_nom": str(demandeur2_nom).strip() if (advanced_household and is_couple) else "",
+            "demandeur2_nom": str(demandeur2_nom).strip() if is_couple else "",
             "categorie": cat,
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
-            "couple_demandeur": bool(is_couple) if advanced_household else False,
+            "couple_demandeur": bool(is_couple),
             "revenus_demandeur_annuels": rev1,
-            "revenus_conjoint_annuels": rev2 if (advanced_household and is_couple) else [],
+            "revenus_conjoint_annuels": rev2 if is_couple else [],
             "prestations_familiales_a_compter_mensuel": float(pf_m),
             "share_art34": bool(share_art34),
             "art34_deg1_ids": [],
@@ -1830,7 +1831,7 @@ if multi_mode:
                     "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
                 })
 
-                # ✅ Ajouter patrimoine perso au dossier (DISPO en mode simple ET ménage avancé)
+                # ✅ Patrimoine perso par dossier (multi) — ajouté au ménage commun
                 if bool(d.get("patrimoine_perso_enabled", False)):
                     p1 = d.get("patrimoine_perso_dem1", {}) or {}
                     p2 = d.get("patrimoine_perso_dem2", None)
@@ -1847,7 +1848,6 @@ if multi_mode:
                     answers["avantage_nature_logement_mensuel"] = float(answers.get("avantage_nature_logement_mensuel", 0.0)) \
                         + float(p1.get("avn_m", 0.0)) + float((p2 or {}).get("avn_m", 0.0))
 
-                    # pour affichage PDF (déjà géré dans make_decision_pdf_cpas)
                     answers["_patrimoine_perso_pdf"] = {"dem1": p1, "dem2": p2 if d.get("couple_demandeur") else None}
 
                 # Ménage avancé : art34 avancé + injection
@@ -1979,7 +1979,7 @@ if multi_mode:
                     st.info("PDF indisponible ici (reportlab non installé). Ajoute `reportlab` dans requirements.txt.")
 
 # ------------------------------------------------------------
-# MODE 1 DEMANDEUR
+# MODE 1 DEMANDEUR (SIMPLE)
 # ------------------------------------------------------------
 else:
     answers = {}
@@ -2001,16 +2001,13 @@ else:
 
     st.divider()
     st.subheader("1) Revenus du demandeur")
-    answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE", value=False)
 
-    st.markdown("**Demandeur 1**")
+    # ✅ CHANGEMENT: mode simple = plus de couple
+    answers["couple_demandeur"] = False
+    st.markdown("**Demandeur**")
     answers["revenus_demandeur_annuels"] = ui_revenus_block("dem")
-
     answers["revenus_conjoint_annuels"] = []
-    if answers["couple_demandeur"]:
-        st.divider()
-        st.markdown("**Demandeur 2 (conjoint/partenaire)**")
-        answers["revenus_conjoint_annuels"] = ui_revenus_block("conjoint_partenaire")
+    st.caption("Astuce : pour un couple, active 'Plusieurs demandes RIS' et mets 1 dossier.")
 
     st.divider()
     st.subheader("PF à compter (spécifiques au demandeur)")
