@@ -946,7 +946,15 @@ def date_fr(iso: str) -> str:
         return f"{d}/{m}/{y}"
     except Exception:
         return str(iso)
-
+        
+def cat_label(cat: str) -> str:
+    cat = (cat or "").strip().lower()
+    mapping = {
+        "cohab": "Cohabitant",
+        "isole": "Isolé",
+        "fam_charge": "Famille à charge",
+    }
+    return mapping.get(cat, cat)
 
 def _safe(s) -> str:
     return (s or "").replace("\n", " ").strip()
@@ -1046,11 +1054,18 @@ def make_decision_pdf_cpas(
     story.append(Spacer(1, 8))
 
     # Meta
+    #story.append(Paragraph(
+        #f"Catégorie : <b>{res_mois_suivants.get('categorie','')}</b> — "
+        #f"Taux RI annuel (référence) : <b>{euro(res_mois_suivants.get('taux_ris_annuel',0))} €</b>",
+        #base
+    #))
+
     story.append(Paragraph(
-        f"Catégorie : <b>{res_mois_suivants.get('categorie','')}</b> — "
+        f"Catégorie : <b>{cat_label(res_mois_suivants.get('categorie',''))}</b> — "
         f"Taux RI annuel (référence) : <b>{euro(res_mois_suivants.get('taux_ris_annuel',0))} €</b>",
         base
     ))
+
     story.append(Paragraph(
         f"Taux RI mensuel (dérivé) : <b>{euro(res_mois_suivants.get('taux_ris_mensuel_derive',0))} €</b>",
         base
