@@ -2160,8 +2160,8 @@ else:
     answers["date_demande"] = st.date_input("Date de la demande", value=date.today())
 
     st.divider()
-    st.subheader("1) Revenus du demandeur — encodage mensuel OU annuel (sauf ALE = chèques)")
-    answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE (2 demandeurs ensemble)", value=False)
+    st.subheader("1) Revenus du demandeur")
+    answers["couple_demandeur"] = st.checkbox("Demande introduite par un COUPLE", value=False)
 
     st.markdown("**Demandeur 1**")
     answers["revenus_demandeur_annuels"] = ui_revenus_block("dem")
