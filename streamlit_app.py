@@ -1028,11 +1028,19 @@ def make_decision_pdf_cpas(
             else:
                 active_info.append(f"{who} — {euro(rev_ann)} €/an{dq_txt}")
 
-        story.append(bullets(active_info) if active_info else Paragraph("Aucun cohabitant encodé.", base))
+        #story.append(bullets(active_info) if active_info else Paragraph("Aucun cohabitant encodé.", base))
+        if active_info:
+            story.append(bullets(active_info))
+        #sinon : rien (on n'affiche pas la phrase moche)
 
         # ✅ Si pas de cohabitants "mode simple", mais art.34 avancé -> on détaille via household + debug
         adv = answers_snapshot.get("_advanced_household_pdf") or None
-        if (not (cohabitants or [])) and adv and float(res_seg.get("cohabitants_part_a_compter_mensuel", 0.0)) > 0:
+        if adv and (
+            str(res_seg.get("art34_mode", "")).upper() == "MENAGE_AVANCE"
+            or res_seg.get("debug_deg1")
+            or res_seg.get("debug_deg2")
+        ):
+
             members_by_id = adv.get("members_by_id", {}) or {}
             taux = float(adv.get("taux_a_laisser_mensuel", 0.0))
 
