@@ -1054,8 +1054,19 @@ def make_decision_pdf_cpas(
                     for mid in ids:
                         rm = _m_rev_m(mid)
                         ex = max(0.0, rm - taux)
-                        lines.append(f"— {_m_name(mid)} : {euro(rm)} − {euro(taux)} = {euro(ex)} €/mois")
-                    lines.append(f"Total débiteurs 1er degré pris en compte : <b>{euro(float(dbg1.get('pris_en_compte_m',0)))} €</b> / mois")
+                        nom = _m_name(mid)
+
+                        # Ligne 1 : revenu (ex: "1.600€ de pension légale")
+                        lines.append(f"— {euro(rm)} € : {nom}")
+
+                        # Ligne 2 : détail du calcul
+    l                    ines.append(f"  {euro(rm)} € − {euro(taux)} € = {euro(ex)} € à prendre en compte / mois")
+
+                    #for mid in ids:
+                        #rm = _m_rev_m(mid)
+                        #ex = max(0.0, rm - taux)
+                        #lines.append(f"— {_m_name(mid)} : {euro(rm)} − {euro(taux)} = {euro(ex)} €/mois")
+                    #lines.append(f"Total débiteurs 1er degré pris en compte : <b>{euro(float(dbg1.get('pris_en_compte_m',0)))} €</b> / mois")
 
             dbg2 = res_seg.get("debug_deg2") or {}
             if dbg2:
@@ -1986,12 +1997,23 @@ if multi_mode:
                 # mini mapping id -> label (évite d’embarquer tout l’objet)
                 id_to_label = {mid: (members_by_id.get(mid, {}) or {}).get("label", str(mid)) for mid in (deg1_ids + deg2_ids)}
 
+    
+                sel_members = {}
+                for mid in (deg1_ids + deg2_ids):
+                    m = members_by_id.get(mid, {}) or {}
+                    sel_members[mid] = {
+                        "name": (m.get("name") or "").strip(),
+                        "revenu_net_annuel": float(m.get("revenu_net_annuel", 0.0)),
+                    }
+
                 answers["_advanced_household_pdf"] = {
                     "deg1_ids": deg1_ids,
                     "deg2_ids": deg2_ids,
                     "id_to_label": id_to_label,
                     "taux_a_laisser_mensuel": float(taux_art34),
+                    "members_by_id": sel_members,   # ✅ NEW
                 }
+
             else:
                 answers["_advanced_household_pdf"] = None
 
