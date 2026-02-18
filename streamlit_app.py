@@ -1397,6 +1397,21 @@ def make_decision_pdf_cpas(
 
         story.append(Paragraph("Ressources du demandeur (propres) :", h3))
 
+        pp = answers_snapshot.get("_patrimoine_perso_pdf")
+        if pp:
+            d1 = pp.get("dem1") or {}
+            d2 = pp.get("dem2") or None
+            lines = [f"Patrimoine séparé — Demandeur 1 : capitaux {euro(d1.get('capitaux',0))} € ; "
+                     f"biens {len(d1.get('biens',[]) or [])} ; cessions {len(d1.get('cessions',[]) or [])} ; "
+                     f"avantage nature {euro(d1.get('avn_m',0))} €/mois"]
+            if d2 is not None:
+                lines.append(f"Patrimoine séparé — Demandeur 2 : capitaux {euro(d2.get('capitaux',0))} € ; "
+                     f"biens {len(d2.get('biens',[]) or [])} ; cessions {len(d2.get('cessions',[]) or [])} ; "
+                     f"avantage nature {euro(d2.get('avn_m',0))} €/mois")
+            story.append(bullets(lines))
+            story.append(Spacer(1, 4))
+
+
         _ = render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
         if bool(answers_snapshot.get("couple_demandeur", False)):
             _ = render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
@@ -1780,6 +1795,13 @@ if multi_mode:
         "Ménage avancé (exemple : Parents et enfants qui font l'objet de la demande)",
         value=True
     )
+    
+    patrimoine_separe = False
+    if advanced_household:
+        patrimoine_separe = st.checkbox(
+            "Patrimoine séparé (par dossier / par demandeur en cas de couple)",
+            value=False
+        )
 
     nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
 
@@ -1827,6 +1849,46 @@ if multi_mode:
             key=f"hd_pf_{i}"
         )
 
+        # ✅ Patrimoine séparé (UNIQUEMENT multi + ménage avancé)
+    if advanced_household and patrimoine_separe:
+        with st.expander("Patrimoine & ressources personnels", expanded=False):
+            st.markdown("**Demandeur 1**")
+
+            cap1 = st.number_input(
+                "Capitaux mobiliers (total €)",
+                min_value=0.0, value=0.0, step=100.0,
+                key=f"pd_cap1_{i}"
+            )
+
+            # (minimal pour commencer) avantage nature perso
+            avn1 = st.number_input(
+                "Avantage nature logement (€/mois)",
+                min_value=0.0, value=0.0, step=10.0,
+                key=f"pd_avn1_{i}"
+            )
+
+            # Tu peux ajouter ici ensuite: biens perso + cessions perso (même logique que ui_menage_common)
+
+            perso_dem2 = {}
+            if is_couple:
+                st.divider()
+                st.markdown("**Demandeur 2 (conjoint)**")
+                cap2 = st.number_input(
+                    "Capitaux mobiliers (total €)",
+                    min_value=0.0, value=0.0, step=100.0,
+                    key=f"pd_cap2_{i}"
+                )
+                avn2 = st.number_input(
+                    "Avantage nature logement (€/mois)",
+                    min_value=0.0, value=0.0, step=10.0,
+                    key=f"pd_avn2_{i}"
+                )
+                perso_dem2 = {"capitaux": float(cap2), "biens": [], "cessions": [], "avn_m": float(avn2)}
+
+            dossiers[i]["patrimoine_perso_dem1"] = {"capitaux": float(cap1), "biens": [], "cessions": [], "avn_m": float(avn1)}
+            dossiers[i]["patrimoine_perso_dem2"] = perso_dem2
+
+
         share_art34 = st.checkbox(
             "Enfants/Jeunes demandeurs (ménage avancé)",
             value=False,
@@ -1849,6 +1911,10 @@ if multi_mode:
             "art34_deg1_ids": [],
             "art34_deg2_ids": [],
             "include_ris_from_dossiers": [],
+            "patrimoine_separe": bool(patrimoine_separe),
+            "patrimoine_perso_dem1": {},
+            "patrimoine_perso_dem2": {},
+
         })
 
     # B) Ménage commun
@@ -2035,6 +2101,21 @@ if multi_mode:
                     "revenus_conjoint_annuels": d["revenus_conjoint_annuels"],
                     "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
                 })
+
+                # ✅ Patrimoine séparé (multi + ménage avancé)
+                if advanced_household and patrimoine_separe:
+                    p1 = d.get("patrimoine_perso_dem1", {}) or {}
+                    p2 = d.get("patrimoine_perso_dem2", {}) or {}
+
+                # On remplace le patrimoine "commun" par celui du dossier (perso)
+                    answers["capital_mobilier_total"] = float(p1.get("capitaux", 0.0)) + float(p2.get("capitaux", 0.0))
+                    answers["biens_immobiliers"] = (p1.get("biens", []) or []) + (p2.get("biens", []) or [])
+                    answers["cessions"] = (p1.get("cessions", []) or []) + (p2.get("cessions", []) or [])
+                    answers["avantage_nature_logement_mensuel"] = float(p1.get("avn_m", 0.0)) + float(p2.get("avn_m", 0.0))
+
+                # (Optionnel) pour le PDF, on garde le détail "qui a quoi"
+                    answers["_patrimoine_perso_pdf"] = {"dem1": p1, "dem2": p2 if d.get("couple_demandeur") else None}
+
 
                 if advanced_household:
                     art34_adv = compute_art34_menage_avance(
