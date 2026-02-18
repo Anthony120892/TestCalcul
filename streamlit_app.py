@@ -1231,7 +1231,7 @@ def make_decision_pdf_cpas(
         story.append(Paragraph("Ressources à considérer :", h2))
         story.append(Paragraph("Ressources du demandeur (propres) :", h3))
 
-        # ✅ Affiche le patrimoine perso si présent (multi simple OU ménage avancé)
+        # ✅ Affiche le patrimoine perso si présent
         render_patrimoine_personnel_pdf()
 
         _ = render_revenus_block("Revenus demandeur", answers_snapshot.get("revenus_demandeur_annuels", []))
@@ -1574,17 +1574,9 @@ def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> fl
     return float(revenus_annuels_apres_exonerations(rev_list or [], cfg_soc, cfg_ale))
 
 # ============================================================
-# ✅ NOUVEAU : UI Patrimoine personnel (multi SIMPLE uniquement)
+# ✅ UI Patrimoine personnel (multi SIMPLE)
 # ============================================================
 def ui_patrimoine_personnel(prefix: str, is_couple: bool) -> dict:
-    """
-    Retourne:
-      {
-        "enabled": bool,
-        "dem1": {"capitaux":..., "biens":..., "cessions":..., "avn_m":...},
-        "dem2": {...} ou None
-      }
-    """
     out = {"enabled": False, "dem1": {"capitaux": 0.0, "biens": [], "cessions": [], "avn_m": 0.0}, "dem2": None}
 
     enabled = st.checkbox("Activer l'encodage du patrimoine & ressources personnels", value=False, key=f"{prefix}_enable")
@@ -1595,8 +1587,6 @@ def ui_patrimoine_personnel(prefix: str, is_couple: bool) -> dict:
     st.markdown("**Demandeur 1 — personnel**")
     cap1 = st.number_input("Capitaux mobiliers personnels (total €)", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_cap1")
     avn1 = st.number_input("Avantage nature logement personnel (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"{prefix}_avn1")
-
-    # (tu peux étendre ici plus tard: biens perso + cessions perso, sur le même modèle que ui_menage_common)
     out["dem1"] = {"capitaux": float(cap1), "biens": [], "cessions": [], "avn_m": float(avn1)}
 
     if is_couple:
@@ -1624,19 +1614,6 @@ if multi_mode:
         value=True
     )
 
-    # ✅ Règle demandée :
-    # - SI multi + ménage avancé => dossier COUPLE interdit
-    # - SI multi + NON ménage avancé => couple autorisé, et on peut ajouter patrimoine personnel (sur demande)
-    # ✅ En ménage avancé : on peut activer le patrimoine séparé
-    if advanced_household:
-        patrimoine_separe = st.checkbox(
-            "Patrimoine séparé (par dossier / par demandeur en cas de couple)",
-            value=False,
-            key="patr_sep_av"
-        )
-    else:
-        patrimoine_separe = False
-
     nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
 
     # A) Dossiers
@@ -1659,19 +1636,9 @@ if multi_mode:
         enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key=f"hd_enf_{i}")
         d_dem = st.date_input("Date de demande", value=date.today(), key=f"hd_date_{i}")
 
-        # ✅ Bloc couple : interdit en ménage avancé
+        # ✅ Couple: autorisé uniquement en ménage avancé (comme tu l'avais indiqué plus bas)
         if advanced_household:
-            is_couple = False
-            st.caption("Dossier couple : indisponible en ménage avancé (multi-demande).")
-        else:
             is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key=f"hd_couple_{i}")
-        # ✅ Couple autorisé UNIQUEMENT en ménage avancé
-        if advanced_household:
-            is_couple = st.checkbox(
-                "Dossier COUPLE (2 demandeurs ensemble)",
-                value=False,
-                key=f"hd_couple_{i}"
-            )
         else:
             is_couple = False
             st.caption("Dossier couple : disponible uniquement en ménage avancé.")
@@ -1697,8 +1664,7 @@ if multi_mode:
             key=f"hd_pf_{i}"
         )
 
-        # ✅ NOUVEAU: Patrimoine personnel UNIQUEMENT si multi + NON ménage avancé,
-        # et seulement si on ouvre la section + on coche l'activation.
+        # ✅ Patrimoine perso : seulement si multi ET NON ménage avancé
         patrimoine_perso = {"enabled": False, "dem1": {"capitaux": 0.0, "biens": [], "cessions": [], "avn_m": 0.0}, "dem2": None}
         if (not advanced_household):
             with st.expander("Patrimoine & ressources personnels (optionnel)", expanded=False):
@@ -1717,7 +1683,6 @@ if multi_mode:
             "categorie": cat,
             "enfants_a_charge": int(enfants),
             "date_demande": d_dem,
-            #"couple_demandeur": bool(is_couple),
             "couple_demandeur": bool(is_couple) if advanced_household else False,
             "revenus_demandeur_annuels": rev1,
             "revenus_conjoint_annuels": rev2 if (advanced_household and is_couple) else [],
@@ -1726,7 +1691,6 @@ if multi_mode:
             "art34_deg1_ids": [],
             "art34_deg2_ids": [],
             "include_ris_from_dossiers": [],
-            # ✅ stock patrimoine perso (multi simple)
             "patrimoine_perso_enabled": bool(patrimoine_perso.get("enabled", False)),
             "patrimoine_perso_dem1": patrimoine_perso.get("dem1") or {"capitaux": 0.0, "biens": [], "cessions": [], "avn_m": 0.0},
             "patrimoine_perso_dem2": patrimoine_perso.get("dem2"),
@@ -1758,12 +1722,18 @@ if multi_mode:
         members = []
         if prefill_demandeurs:
             for d in dossiers:
+                # Demandeur A
                 id1 = f"D{d['idx']+1}A"
                 name1 = (d.get("demandeur_nom") or "").strip() or f"Demandeur D{d['idx']+1}A"
                 rev1_ann = annual_from_revenus_list(d.get("revenus_demandeur_annuels", []), cfg["socio_prof"], cfg["ale"])
                 members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "_source": "demandeur"})
 
-                # couple interdit ici => pas de B
+                # Demandeur B si couple
+                if bool(d.get("couple_demandeur", False)):
+                    id2 = f"D{d['idx']+1}B"
+                    name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
+                    rev2_ann = annual_from_revenus_list(d.get("revenus_conjoint_annuels", []), cfg["socio_prof"], cfg["ale"])
+                    members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann), "exclure": False, "_source": "demandeur"})
 
         nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=3, step=1, key="nb_autres_membres")
         for j in range(int(nb_autres)):
@@ -1861,18 +1831,16 @@ if multi_mode:
                     "prestations_familiales_a_compter_mensuel": d["prestations_familiales_a_compter_mensuel"],
                 })
 
-                # ✅ NOUVEAU: Multi simple (NON ménage avancé) => ajouter patrimoine personnel AU patrimoine ménage
+                # Multi simple (NON ménage avancé) => ajouter patrimoine perso au ménage commun
                 if (not advanced_household) and bool(d.get("patrimoine_perso_enabled", False)):
                     p1 = d.get("patrimoine_perso_dem1", {}) or {}
                     p2 = d.get("patrimoine_perso_dem2", None)
 
-                    # on additionne au ménage commun
                     answers["capital_mobilier_total"] = float(answers.get("capital_mobilier_total", 0.0)) + float(p1.get("capitaux", 0.0)) + float((p2 or {}).get("capitaux", 0.0))
                     answers["biens_immobiliers"] = (answers.get("biens_immobiliers", []) or []) + (p1.get("biens", []) or []) + (((p2 or {}).get("biens", [])) or [])
                     answers["cessions"] = (answers.get("cessions", []) or []) + (p1.get("cessions", []) or []) + (((p2 or {}).get("cessions", [])) or [])
                     answers["avantage_nature_logement_mensuel"] = float(answers.get("avantage_nature_logement_mensuel", 0.0)) + float(p1.get("avn_m", 0.0)) + float((p2 or {}).get("avn_m", 0.0))
 
-                    # pour le PDF : détail perso
                     answers["_patrimoine_perso_pdf"] = {"dem1": p1, "dem2": p2 if d.get("couple_demandeur") else None}
 
                 # Ménage avancé : art34 avancé + injection
@@ -2035,7 +2003,7 @@ else:
     if answers["couple_demandeur"]:
         st.divider()
         st.markdown("**Demandeur 2 (conjoint/partenaire)**")
-        answers["revenus_conjoint_annuels"] = ui_revenus_block("conjoint/partenaire")
+        answers["revenus_conjoint_annuels"] = ui_revenus_block("conjoint_partenaire")
 
     st.divider()
     st.subheader("PF à compter (spécifiques au demandeur)")
