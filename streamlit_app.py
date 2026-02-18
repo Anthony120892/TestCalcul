@@ -1598,7 +1598,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
     answers = {}
 
     st.divider()
-    st.subheader("Ménage (commun)")
 
     #answers["partage_enfants_jeunes_actif"] = st.checkbox(
         #"Partager la part entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
