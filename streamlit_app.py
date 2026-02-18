@@ -1628,7 +1628,7 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
             "Nombre de demandeurs à partager",
             min_value=1, value=max(2, nb_demandeurs), step=1,
             key=f"{prefix}_nb_partage"
-        )
+    )
 
     cohabitants = []
     pf_links = []
