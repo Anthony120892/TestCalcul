@@ -1633,7 +1633,7 @@ if multi_mode:
             "Patrimoine séparé (par dossier / par demandeur en cas de couple)",
             value=False,
             disabled=True,  # couple interdit => option peu pertinente ici
-            help="Désactivé car le dossier couple n'est pas possible en ménage avancé."
+            
         )
     else:
         patrimoine_separe_avance = False  # (on gère autrement en multi simple, via expander par dossier)
