@@ -1060,7 +1060,7 @@ def make_decision_pdf_cpas(
                         lines.append(f"— {euro(rm)} € : {nom}")
 
                         # Ligne 2 : détail du calcul
-    l                    ines.append(f"  {euro(rm)} € − {euro(taux)} € = {euro(ex)} € à prendre en compte / mois")
+                        lines.append(f"  {euro(rm)} € − {euro(taux)} € = {euro(ex)} € à prendre en compte / mois")
 
                     #for mid in ids:
                         #rm = _m_rev_m(mid)
