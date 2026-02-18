@@ -1673,7 +1673,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
     answers["cohabitants_art34"] = cohabitants
     answers["pf_links"] = pf_links
 
-    st.divider()
     st.markdown("### Capitaux mobiliers (ménage)")
     a_cap = st.checkbox("Le ménage possède des capitaux mobiliers", value=False, key=f"{prefix}_cap_yes")
     answers["capital_mobilier_total"] = 0.0
