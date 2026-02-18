@@ -1448,7 +1448,7 @@ def make_decision_pdf_cpas(
             #title_period = f"Du {date_fr(s['du'])} au {date_fr(s['au'])} :"
             #render_one_period(title_period, res_seg, s, seg_first_month)
             #if idx < len(seg_first_month["segments"]) - 1:
-                story.append(PageBreak())
+                #story.append(PageBreak())
 
         #story.append(Paragraph(
             #f"--&gt; Soit un montant total de <b>{euro(seg_first_month.get('ris_1er_mois_total',0))} €</b> pour le mois concerné",
