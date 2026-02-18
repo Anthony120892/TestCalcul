@@ -25,7 +25,7 @@ DEFAULT_ENGINE = {
         "art34": {"taux_a_laisser_mensuel": 876.13},
 
         # Prestations familiales (montant de référence indexable)
-        "pf": {"pf_mensuel_defaut": 0.0},
+        "pf": {"pf_mensuel_defaut": 240.0},
 
         # Capitaux mobiliers (annuels)
         "capital_mobilier": {
@@ -59,7 +59,7 @@ DEFAULT_ENGINE = {
 
         # ALE (✅ valeur du chèque indexable + exonération par chèque)
         "ale": {
-            "valeur_cheque": 0.0,     # <- à encoder/indexer dans la sidebar
+            "valeur_cheque": 4.35,     # <- à encoder/indexer dans la sidebar
             "exon_par_cheque": 6.0    # <- exonération fixe / chèque
         }
     }
