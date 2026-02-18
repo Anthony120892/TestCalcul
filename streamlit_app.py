@@ -1605,7 +1605,7 @@ def ui_money_period_input(label: str, key_prefix: str, default: float = 0.0, ste
 
 def ui_revenus_block(prefix: str) -> list:
     lst = []
-    nb = st.number_input(f"Nombre de revenus à encoder ({prefix})", min_value=0, value=1, step=1, key=f"{prefix}_nb")
+    nb = st.number_input(f"Nombre de revenus à encoder", min_value=0, value=1, step=1, key=f"{prefix}_nb")
     for i in range(int(nb)):
         st.markdown(f"**Revenu {i+1} ({prefix})**")
         c1, c2, c3 = st.columns([2, 1, 1])
