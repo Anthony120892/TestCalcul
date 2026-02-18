@@ -556,7 +556,9 @@ def art34_draw_from_pool_cascade(degree: int,
                                  taux: float,
                                  pools: dict,
                                  share_plan: dict,
-                                 injected_income_m: float = 0.0) -> dict:
+                                 injected_income_m: float = 0.0,
+                                 cap_take_m: float | None = None) -> dict:
+
     ids = list(debtor_ids or [])
     members_by_id = household.get("members_by_id", {}) or {}
     debtors = [members_by_id[i] for i in ids if i in members_by_id]
@@ -579,6 +581,10 @@ def art34_draw_from_pool_cascade(degree: int,
         take = min(float(pools[key]), per)
     else:
         take = float(pools[key])
+    
+    # ✅ cap optionnel (ne pas prendre plus que le besoin restant)
+    if cap_take_m is not None:
+        take = min(float(take), max(0.0, float(cap_take_m)))
 
     take = r2(max(0.0, take))
     pools[key] = r2(max(0.0, float(pools[key]) - take))
@@ -601,7 +607,9 @@ def compute_art34_menage_avance_cascade(dossier: dict,
                                        taux: float,
                                        pools: dict,
                                        share_plan: dict,
-                                       prior_results: list) -> dict:
+                                       prior_results: list,
+                                       besoin_m: float | None = None) -> dict:
+
     """
     Cascade :
       1) essayer débiteurs 1er degré
@@ -614,7 +622,7 @@ def compute_art34_menage_avance_cascade(dossier: dict,
         if 0 <= idx < len(prior_results) and prior_results[idx] is not None:
             inj_m += float(prior_results[idx].get("ris_theorique_mensuel", 0.0))
     inj_m = r2(inj_m)
-
+#ici
     deg1_ids = dossier.get("art34_deg1_ids", []) or []
     deg2_ids = dossier.get("art34_deg2_ids", []) or []
 
@@ -623,7 +631,11 @@ def compute_art34_menage_avance_cascade(dossier: dict,
     used_degree = 0
     part_m = 0.0
 
-    if deg1_ids:
+    # Besoin mensuel max qu’on peut couvrir via art.34 (si fourni)
+    besoin_restant = None if besoin_m is None else r2(max(0.0, float(besoin_m)))
+
+    # 1) 1er degré d’abord (capé au besoin)
+    if deg1_ids and (besoin_restant is None or besoin_restant > 0):
         dbg1 = art34_draw_from_pool_cascade(
             degree=1,
             debtor_ids=deg1_ids,
@@ -631,13 +643,18 @@ def compute_art34_menage_avance_cascade(dossier: dict,
             taux=taux,
             pools=pools,
             share_plan=share_plan,
-            injected_income_m=inj_m
+            injected_income_m=inj_m,
+            cap_take_m=besoin_restant
         )
-        part_m = float(dbg1.get("pris_en_compte_m", 0.0))
-        if part_m > 0:
+        take1 = float(dbg1.get("pris_en_compte_m", 0.0))
+        part_m += take1
+        if take1 > 0:
             used_degree = 1
+        if besoin_restant is not None:
+            besoin_restant = r2(max(0.0, besoin_restant - take1))
 
-    if part_m <= 0.0 and deg2_ids:
+    # 2) Ensuite 2e degré si besoin restant > 0 (et si 2e degré existe)
+    if deg2_ids and (besoin_restant is None or besoin_restant > 0):
         dbg2 = art34_draw_from_pool_cascade(
             degree=2,
             debtor_ids=deg2_ids,
@@ -645,13 +662,19 @@ def compute_art34_menage_avance_cascade(dossier: dict,
             taux=taux,
             pools=pools,
             share_plan=share_plan,
-            injected_income_m=0.0  # injection uniquement au 1er degré (comme logique CPAS)
+            injected_income_m=0.0,   # injection uniquement au 1er degré
+            cap_take_m=besoin_restant
         )
-        part_m = float(dbg2.get("pris_en_compte_m", 0.0))
-        if part_m > 0:
+        take2 = float(dbg2.get("pris_en_compte_m", 0.0))
+        part_m += take2
+        if take2 > 0 and used_degree == 0:
             used_degree = 2
+        if besoin_restant is not None:
+            besoin_restant = r2(max(0.0, besoin_restant - take2))
 
     part_m = r2(part_m)
+#a là
+
     return {
         "art34_mode": "MENAGE_AVANCE_CASCADE",
         "art34_degree_utilise": int(used_degree),
@@ -1888,13 +1911,17 @@ if multi_mode:
 
             # ✅ Appliquer la CASCADE art.34 (ménage avancé)
             if advanced_household:
+                
+                besoin_m = float(res_ms.get("ris_theorique_mensuel", 0.0))  # ✅ gap mensuel avant art.34
+
                 art34_adv = compute_art34_menage_avance_cascade(
                     dossier=d,
                     household=household,
                     taux=taux_art34,
                     pools=pools,
                     share_plan=share_plan,
-                    prior_results=prior_results
+                    prior_results=prior_results,
+                    besoin_m=besoin_m
                 )
 
                 # override mois suivants
