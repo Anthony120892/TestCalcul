@@ -1885,9 +1885,8 @@ if multi_mode:
                 )
                 perso_dem2 = {"capitaux": float(cap2), "biens": [], "cessions": [], "avn_m": float(avn2)}
 
-            dossiers[i]["patrimoine_perso_dem1"] = {"capitaux": float(cap1), "biens": [], "cessions": [], "avn_m": float(avn1)}
-            dossiers[i]["patrimoine_perso_dem2"] = perso_dem2
-
+                dossiers[i]["patrimoine_perso_dem1"] = {"capitaux": float(cap1), "biens": [], "cessions": [], "avn_m": float(avn1)}
+                dossiers[i]["patrimoine_perso_dem2"] = perso_dem2
 
         share_art34 = st.checkbox(
             "Enfants/Jeunes demandeurs (ménage avancé)",
