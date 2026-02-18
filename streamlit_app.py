@@ -1627,16 +1627,15 @@ if multi_mode:
     # ✅ Règle demandée :
     # - SI multi + ménage avancé => dossier COUPLE interdit
     # - SI multi + NON ménage avancé => couple autorisé, et on peut ajouter patrimoine personnel (sur demande)
+    # ✅ En ménage avancé : on peut activer le patrimoine séparé
     if advanced_household:
-        st.info("ℹ️ En **ménage avancé**, le **dossier couple est désactivé** (multi-demande).")
-        patrimoine_separe_avance = st.checkbox(
+        patrimoine_separe = st.checkbox(
             "Patrimoine séparé (par dossier / par demandeur en cas de couple)",
             value=False,
-            disabled=True,  # couple interdit => option peu pertinente ici
-            
+            key="patr_sep_av"
         )
     else:
-        patrimoine_separe_avance = False  # (on gère autrement en multi simple, via expander par dossier)
+        patrimoine_separe = False
 
     nb_dem = st.number_input("Nombre de dossiers/demandes à calculer", min_value=2, max_value=4, value=3, step=1)
 
