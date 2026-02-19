@@ -1986,7 +1986,32 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
                 ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
                 key=f"{prefix}_coh_t_{i}"
             )
-            rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"{prefix}_coh_rev_{i}", default=0.0, step=100.0)
+
+
+                        # ✅ Encodage revenus cohabitant (robuste, sans ui_money_period_input)
+            period = c2.selectbox(
+                "Période",
+                ["Annuel (€/an)", "Mensuel (€/mois)"],
+                key=f"{prefix}_coh_rev_{i}_period"
+            )
+
+            if period.startswith("Annuel"):
+                rev_annuel = c2.number_input(
+                    "Revenus nets (€/an)",
+                    min_value=0.0, value=0.0, step=100.0,
+                    key=f"{prefix}_coh_rev_{i}_val_a"
+                )
+            else:
+                rev_m = c2.number_input(
+                    "Revenus nets (€/mois)",
+                    min_value=0.0, value=0.0, step=50.0,
+                    key=f"{prefix}_coh_rev_{i}_val_m"
+                )
+                rev_annuel = float(rev_m) * 12.0
+
+            c2.caption(f"➡️ Retenu : {rev_annuel:.2f} €/an")
+
+            #rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"{prefix}_coh_rev_{i}", default=0.0, step=100.0)
             excl = c3.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
 
             dq = st.date_input(
