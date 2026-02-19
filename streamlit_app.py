@@ -1329,9 +1329,13 @@ def make_decision_pdf_cpas(
 
     # --- Rendu détail capitaux / immo / cession (depuis un dict "res-like") ---
     def render_capitaux_detail_from(det: dict, annuel: float, title: str):
-        if annuel <= 0 and float(det.get("total_capital", 0.0)) <= 0:
-            story.append(Paragraph(f"{title} : aucun.", base))
+         details = (res_seg or {}).get("details_capitaux") or []
+        if montant_annuel <= 0 and len(details) == 0:
             return
+        #if annuel <= 0 and float(det.get("total_capital", 0.0)) <= 0:
+            #story.append(Paragraph(f"{title} : aucun.", base))
+            #return
+
         story.append(Paragraph(f"{title} — détail :", h3))
         story.append(bullets([
             f"Total capitaux encodés : {euro(det.get('total_capital',0))} €",
@@ -1352,9 +1356,12 @@ def make_decision_pdf_cpas(
         story.append(Paragraph(f"<font size=9 color='grey'>Total à compter (annuel) : {euro(annuel)} €</font>", small))
 
     def render_immo_detail_from(det: dict, total: float, title: str):
-        if total <= 0 and not (det.get("details") or []):
-            story.append(Paragraph(f"{title} : aucun.", base))
+        details = (res_seg or {}).get("details_immo") or []
+        if montant_annuel <= 0 and len(details) == 0:
             return
+        #if total <= 0 and not (det.get("details") or []):
+            #story.append(Paragraph(f"{title} : aucun.", base))
+            #return
         story.append(Paragraph(f"{title} — détail :", h3))
         story.append(bullets([
             f"Coefficient RC : {euro(det.get('coeff_rc',0))}",
@@ -1379,10 +1386,17 @@ def make_decision_pdf_cpas(
         story.append(money_table(rows, col_widths=[1.1*cm, 1.8*cm, 1.7*cm, 1.1*cm, 1.7*cm, 1.4*cm, 1.6*cm, 1.4*cm, 1.3*cm, 2.0*cm]))
         story.append(Paragraph(f"<font size=9 color='grey'>Total à compter (annuel) : {euro(total)} €</font>", small))
 
+    #def render_cession_detail_from(det: dict, total: float, title: str):
+        #if total <= 0 and not (det.get("details_cessions") or []):
+            #story.append(Paragraph(f"{title} : aucune.", base))
+            #return
     def render_cession_detail_from(det: dict, total: float, title: str):
-        if total <= 0 and not (det.get("details_cessions") or []):
-            story.append(Paragraph(f"{title} : aucune.", base))
-            return
+        details = (det or {}).get("details_cessions") or []
+        if total <= 0 and len(details) == 0:
+            return  # ✅ n'affiche rien du tout
+
+    # ... le reste de ta fonction (tableau, puces, tranches, etc.)
+
 
         story.append(Paragraph(f"{title} — détail :", h3))
         rows = [["Cession", "Valeur vénale", "Usufruit ?", "Ratio", "Valeur retenue"]]
@@ -1513,13 +1527,29 @@ def make_decision_pdf_cpas(
         
         story.append(Spacer(1, 4))
         story.append(bullets([
-            f"Prestations familiales : {euro(pf_ann)} € (annuel) [= {euro(float(res_seg.get('prestations_familiales_a_compter_mensuel',0)))} €/mois × 12]",
+            #f"Prestations familiales : {euro(pf_ann)} € (annuel) [= {euro(float(res_seg.get('prestations_familiales_a_compter_mensuel',0)))} €/mois × 12]",
             #f"Avantage en nature logement (ménage) : {euro(avn_ann)} € (annuel) [= {euro(float(res_seg.get('avantage_nature_logement_mensuel',0)))} €/mois × 12]",
         
-            f"Avantage en nature logement : {euro(avn_ann)} € (annuel) "
-            f"[commun {euro(avn_c_ann)} € + perso {euro(avn_p_ann)} €]",
+            #f"Avantage en nature logement : {euro(avn_ann)} € (annuel) "
+            #f"[commun {euro(avn_c_ann)} € + perso {euro(avn_p_ann)} €]",
 
-        ]))
+        #]))
+        EPS = 0.01  # ou 0.005 selon ton r2
+        
+        bul = []
+
+        if pf_ann > 0:
+            bul.append(f"Prestations familiales : {euro(pf_ann)} € (annuel)")
+
+        if avn_ann > 0:
+            bul.append(
+                f"Avantage en nature logement : {euro(avn_ann)} € (annuel) "
+                f"[commun {euro(avn_c_ann)} € + perso {euro(avn_p_ann)} €]"
+            )
+
+        if bul:
+            story.append(bullets(bul))
+
 
         story.append(Spacer(1, 8))
         render_cohabitants_block(answers_snapshot.get("cohabitants_art34", []), res_seg)
