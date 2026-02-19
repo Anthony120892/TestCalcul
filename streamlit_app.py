@@ -1,5 +1,3 @@
-Bien 
-
 import json
 import os
 import calendar
@@ -1974,6 +1972,8 @@ def _extract_patrimoine(d: dict | None) -> dict:
 # ============================================================
 # UI Ménage commun (mode simple art34 + 4 blocs)
 # ============================================================
+# de la 
+    
 def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, show_simple_art34: bool = True) -> dict:
     answers = {}
     st.divider()
@@ -2013,8 +2013,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
                 key=f"{prefix}_coh_t_{i}"
             )
 
-
-                        # ✅ Encodage revenus cohabitant (robuste, sans ui_money_period_input)
             period = c2.selectbox(
                 "Période",
                 ["Annuel (€/an)", "Mensuel (€/mois)"],
@@ -2037,7 +2035,6 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
 
             c2.caption(f"➡️ Retenu : {rev_annuel:.2f} €/an")
 
-            #rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"{prefix}_coh_rev_{i}", default=0.0, step=100.0)
             excl = c3.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
 
             dq = st.date_input(
@@ -2064,12 +2061,9 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
 
     answers["cohabitants_art34"] = cohabitants
     answers["pf_links"] = pf_links
-
-    pat = ui_patrimoine_like_simple(prefix=f"{prefix}_pat")
-    answers.update(pat)
-
     return answers
 
+# jusqu'ici 
 def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> float:
     return float(revenus_annuels_apres_exonerations(rev_list or [], cfg_soc, cfg_ale))
 
@@ -2146,6 +2140,17 @@ if multi_mode:
                 value=False,
                 key=f"hd_share_{i}"
             )
+        share_art34 = False
+        if advanced_household:
+            share_art34 = st.checkbox(
+                "Enfant/Jeune demandeur : partager le pool art.34 (si plusieurs dossiers avec mêmes débiteurs 1er degré)",
+                value=False,
+                key=f"hd_share_{i}"
+            )
+
+        # ✅ À LA FIN DU DOSSIER
+        with st.expander("Patrimoine & ressources PERSONNELS (ce dossier) — à encoder en fin de dossier", expanded=False):
+            pat_perso = ui_patrimoine_like_simple(prefix=f"hd_pat_perso_{i}")
 
         dossiers.append({
             "idx": i,
@@ -2166,13 +2171,20 @@ if multi_mode:
             "include_ris_from_dossiers": [],
         })
 
-    with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
+    with st.expander("Cohabitants admissibles (art.34) — ménage (commun)", expanded=False):
         menage_common = ui_menage_common(
             "hd_menage",
             nb_demandeurs=int(nb_dem),
             enable_pf_links=True,
             show_simple_art34=not advanced_household
         )
+
+    with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
+        pat_common_ui = ui_patrimoine_like_simple(prefix="hd_menage_pat_common")
+
+    # ✅ on fusionne dans un seul dict “ménage commun”
+    menage_common = (menage_common or {})
+    menage_common.update(pat_common_ui or {})
 
     # PF-links -> dossiers
     for link in menage_common.get("pf_links", []):
@@ -2575,12 +2587,17 @@ else:
 
     # --- Calcul single ---
     st.divider()
+    
+    with st.expander("Patrimoine & ressources PERSONNELS (ce dossier) — fin de dossier", expanded=False):
+        pat_perso_single = ui_patrimoine_like_simple(prefix="s_pat_perso")
+
     if st.button("Calculer (single)"):
         # answers = ménage commun + dossier
         answers = {}
         answers.update(menage_common or {})
         answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
-        answers["_patrimoine_perso"]  = _extract_patrimoine({})   # single : si tu veux, tu peux aussi ajouter un expander “perso”
+        answers["_patrimoine_perso"]  = _extract_patrimoine(pat_perso_single or {})  # ✅
+
 
         answers.update({
             "categorie": cat,
@@ -2591,6 +2608,7 @@ else:
             "revenus_demandeur_annuels": rev1,
             "revenus_conjoint_annuels": rev2 if is_couple else [],
             "prestations_familiales_a_compter_mensuel": float(pf_m),
+
         })
 
         # En ménage avancé: on ne veut pas l’art.34 simple
