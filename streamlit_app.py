@@ -1972,6 +1972,99 @@ def _extract_patrimoine(d: dict | None) -> dict:
 # ============================================================
 # UI Ménage commun (mode simple art34 + 4 blocs)
 # ============================================================
+def ui_cohabitants_simple(prefix: str, nb_demandeurs: int, enable_pf_links: bool = True) -> dict:
+    answers = {
+        "partage_enfants_jeunes_actif": False,
+        "nb_enfants_jeunes_demandeurs": 1,
+        "cohabitants_art34": [],
+        "pf_links": []
+    }
+
+    if nb_demandeurs > 1:
+        answers["partage_enfants_jeunes_actif"] = st.checkbox(
+            "Partager la part entre plusieurs ENFANTS/JEUNES demandeurs (uniquement dans ce cas)",
+            value=False,
+            key=f"{prefix}_partage"
+        )
+        if answers["partage_enfants_jeunes_actif"]:
+            answers["nb_enfants_jeunes_demandeurs"] = st.number_input(
+                "Nombre de demandeurs à partager",
+                min_value=1, value=max(2, nb_demandeurs), step=1,
+                key=f"{prefix}_nb_partage"
+            )
+
+    st.markdown("### Cohabitants admissibles (art.34) — mode simple")
+    st.caption("Tu peux encoder une date de départ. Après cette date, la personne ne compte plus.")
+    nb_coh = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=2, step=1, key=f"{prefix}_nbcoh")
+
+    cohabitants = []
+    pf_links = []
+
+    for i in range(int(nb_coh)):
+        st.markdown(f"**Cohabitant {i+1}**")
+        c1, c2, c3 = st.columns([2, 1, 1])
+
+        nom = c1.text_input("Nom (optionnel)", value="", key=f"{prefix}_coh_name_{i}")
+        typ = c1.selectbox(
+            "Type",
+            ["partenaire", "debiteur_direct_1", "debiteur_direct_2", "autre", "debiteur direct 1", "debiteur direct 2"],
+            key=f"{prefix}_coh_t_{i}"
+        )
+
+        period = c2.selectbox(
+            "Période",
+            ["Annuel (€/an)", "Mensuel (€/mois)"],
+            key=f"{prefix}_coh_rev_{i}_period"
+        )
+        if period.startswith("Annuel"):
+            rev_annuel = c2.number_input(
+                "Revenus nets (€/an)",
+                min_value=0.0, value=0.0, step=100.0,
+                key=f"{prefix}_coh_rev_{i}_val_a"
+            )
+        else:
+            rev_m = c2.number_input(
+                "Revenus nets (€/mois)",
+                min_value=0.0, value=0.0, step=50.0,
+                key=f"{prefix}_coh_rev_{i}_val_m"
+            )
+            rev_annuel = float(rev_m) * 12.0
+
+        c2.caption(f"➡️ Retenu : {rev_annuel:.2f} €/an")
+
+        excl = c3.checkbox("Ne pas prendre en compte (équité / décision CPAS)", value=False, key=f"{prefix}_coh_x_{i}")
+
+        dq = st.date_input(
+            "Date de départ du ménage (optionnel) — dernier jour ensemble",
+            value=None,
+            key=f"{prefix}_coh_dq_{i}"
+        )
+
+        if enable_pf_links:
+            c4, c5, c6 = st.columns([1.2, 1, 1])
+            has_pf = c4.checkbox("PF perçues ?", value=False, key=f"{prefix}_coh_pf_yes_{i}")
+            if has_pf:
+                pf_m = c5.number_input("PF (€/mois)", min_value=0.0, value=0.0, step=10.0, key=f"{prefix}_coh_pf_m_{i}")
+                dem_idx = c6.number_input("Pour demandeur #", min_value=1, max_value=nb_demandeurs, value=1, step=1, key=f"{prefix}_coh_pf_dem_{i}")
+                pf_links.append({"dem_index": int(dem_idx) - 1, "pf_mensuel": float(pf_m)})
+
+        cohabitants.append({
+            "name": str(nom).strip(),
+            "type": typ,
+            "revenu_net_annuel": float(rev_annuel),
+            "exclure": bool(excl),
+            "date_quitte_menage": str(dq) if isinstance(dq, date) else None
+        })
+
+    answers["cohabitants_art34"] = cohabitants
+    answers["pf_links"] = pf_links
+    return answers
+
+
+def ui_patrimoine_common(prefix: str) -> dict:
+    # juste ton bloc patrimoine “like simple”
+    return ui_patrimoine_like_simple(prefix=f"{prefix}_pat")
+
 def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, show_simple_art34: bool = True) -> dict:
     answers = {}
     st.divider()
@@ -2098,6 +2191,12 @@ if multi_mode:
 
     for i in range(int(nb_dem)):
         st.markdown(f"### Dossier {i+1}")
+        
+        section = st.selectbox(
+            "Afficher / encoder",
+            ["Identité & catégorie", "Revenus", "PF", "Patrimoine & ressources PERSONNELS", "Art.34 (cascade)"],
+            key=f"hd_section_{i}"
+        )
 
         demandeur_nom = st.text_input("Nom du demandeur", value="", key=f"hd_dem_nom_{i}")
         label = st.text_input("Nom/Label", value=f"Dossier {i+1}", key=f"hd_lab_{i}")
@@ -2164,13 +2263,27 @@ if multi_mode:
             "include_ris_from_dossiers": [],
         })
 
+    # 1) Cohabitants (uniquement si PAS ménage avancé)
+    menage_cohabitants = {"cohabitants_art34": [], "pf_links": [], "partage_enfants_jeunes_actif": False, "nb_enfants_jeunes_demandeurs": 1}
+    if not advanced_household:
+        with st.expander("Cohabitants admissibles (art.34) — ménage (mode simple)", expanded=False):
+            menage_cohabitants = ui_cohabitants_simple(
+                prefix="hd_coh",
+                nb_demandeurs=int(nb_dem),
+                enable_pf_links=True
+            )
+
+    # 2) Patrimoine du ménage (toujours utile, même en avancé)
     with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
-        menage_common = ui_menage_common(
-            "hd_menage",
-            nb_demandeurs=int(nb_dem),
-            enable_pf_links=True,
-            show_simple_art34=not advanced_household
-        )
+        menage_patrimoine = ui_patrimoine_common(prefix="hd_menage")
+
+    #with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
+        #menage_common = ui_menage_common(
+            #"hd_menage",
+            #nb_demandeurs=int(nb_dem),
+            #enable_pf_links=True,
+            #show_simple_art34=not advanced_household
+        #)
 
     # PF-links -> dossiers
     for link in menage_common.get("pf_links", []):
@@ -2296,9 +2409,17 @@ if multi_mode:
         for d in dossiers:
             # answers = ménage commun + dossier
             answers = {}
-            answers.update(menage_common or {})
+            #answers.update(menage_common or {})
             # ✅ Patrimoine commun vs perso
-            answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
+            #answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
+            # menage_common = fusion des 2 sous-blocs
+            menage_common = {}
+            menage_common.update(menage_cohabitants or {})
+            menage_common.update(menage_patrimoine or {})
+
+            answers.update(menage_common)
+
+            answers["_patrimoine_common"] = _extract_patrimoine(menage_patrimoine or {})
             answers["_patrimoine_perso"]  = _extract_patrimoine(d.get("patrimoine_perso") or {})
 
             answers.update({
