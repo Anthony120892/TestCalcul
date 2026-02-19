@@ -1,5 +1,3 @@
-Bien 
-
 import json
 import os
 import calendar
