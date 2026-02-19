@@ -431,6 +431,18 @@ def cohabitant_is_active_asof(c: dict, as_of: date) -> bool:
 
 def _coh_display_name(c: dict) -> str:
     return (c.get("name") or c.get("nom") or c.get("label") or "").strip()
+
+
+
+
+
+
+
+#def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
+                                         #taux_a_laisser_mensuel: float,
+                                         #partage_active: bool,
+                                         #nb_demandeurs_a_partager: int,
+                                         #as_of: date) -> dict:
     
 def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          taux_a_laisser_mensuel: float,
@@ -438,12 +450,6 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          partage_active: bool,
                                          nb_demandeurs_a_partager: int,
                                          as_of: date) -> dict:
-
-#def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
-                                         #taux_a_laisser_mensuel: float,
-                                         #partage_active: bool,
-                                         #nb_demandeurs_a_partager: int,
-                                         #as_of: date) -> dict:
     taux = max(0.0, float(taux_a_laisser_mensuel))
 
     revenus_partenaire_m = 0.0
@@ -451,11 +457,12 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
 
     revenus_debiteurs_m_brut = 0.0
     nb_debiteurs = 0
-
     debiteurs_excedents_m_total = 0.0
 
     detail_partenaire = []
     detail_debiteurs = []
+
+    cat_norm = (categorie or "").strip().lower()
 
     for c in cohabitants:
         typ = normalize_art34_type(c.get("type", "autre"))
@@ -467,16 +474,15 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         revenu_ann = max(0.0, float(c.get("revenu_net_annuel", 0.0)))
         revenu_m = revenu_ann / 12.0
         nom = _coh_display_name(c)
-        
+
         if typ == "partenaire":
-            # Règle CPAS : en cohab/isolé -> on ne compte que la partie > taux cohab
-            # en fam_charge -> on compte tout
-            if (categorie or "").strip().lower() == "fam_charge":
+            # ✅ règle partenaire
+            if cat_norm == "fam_charge":
                 compte_m = revenu_m
                 mode = "fam_charge: 100% pris en compte"
             else:
                 compte_m = max(0.0, revenu_m - taux)
-                mode = f"cohab/isolé: max(0, revenu - taux_cohab)"
+                mode = "cohab/isolé: max(0, revenu - taux_cohab)"
 
             revenus_partenaire_m += compte_m
             nb_partenaire += 1
@@ -486,30 +492,26 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                 "mensuel_brut": r2(revenu_m),
                 "taux_a_laisser_mensuel": r2(taux),
                 "mensuel_pris_en_compte": r2(compte_m),
+                "mensuel": r2(compte_m),  # ✅ alias pour le PDF (ton rendu lit 'mensuel')
                 "regle": mode,
                 "annuel": r2(revenu_ann),
             })
 
-        #if typ == "partenaire":
-            #revenus_partenaire_m += revenu_m
-            #nb_partenaire += 1
-            #detail_partenaire.append({"type": "partenaire", "name": nom, "mensuel": r2(revenu_m), "annuel": r2(revenu_ann)})
+        elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
+            revenus_debiteurs_m_brut += revenu_m
+            nb_debiteurs += 1
 
-        #elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
-            #revenus_debiteurs_m_brut += revenu_m
-            #nb_debiteurs += 1
+            excedent_m = max(0.0, revenu_m - taux)
+            debiteurs_excedents_m_total += excedent_m
 
-            #excedent_m = max(0.0, revenu_m - taux)
-            #debiteurs_excedents_m_total += excedent_m
-
-            #detail_debiteurs.append({
-                #"type": typ,
-                #"name": nom,
-                #"mensuel": r2(revenu_m),
-                #"annuel": r2(revenu_ann),
-                #"taux_a_laisser_mensuel": r2(taux),
-                #"excedent_mensuel_apres_deduction": r2(excedent_m),
-            #})
+            detail_debiteurs.append({
+                "type": typ,
+                "name": nom,
+                "mensuel": r2(revenu_m),
+                "annuel": r2(revenu_ann),
+                "taux_a_laisser_mensuel": r2(taux),
+                "excedent_mensuel_apres_deduction": r2(excedent_m),
+            })
 
     debiteurs_excedents_m_total = r2(debiteurs_excedents_m_total)
 
@@ -536,6 +538,7 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         "partage_active": bool(partage_active),
         "nb_demandeurs_partage": int(nb_demandeurs_a_partager),
     }
+
 
 # ============================================================
 # MENAGE AVANCE (MULTI) — CASCADE / POOLS / PRIORITE
@@ -1349,7 +1352,10 @@ def make_decision_pdf_cpas(
                 for p in detail_part:
                     who = (p.get("name") or "").strip()
                     who = f"{who} (partenaire)" if who else "partenaire"
-                    lines.append(f"{who} : {euro(float(p.get('mensuel',0)))} €/mois")
+                    brut = float(p.get("mensuel_brut", 0.0))
+                    pris = float(p.get("mensuel_pris_en_compte", p.get("mensuel", 0.0)))
+                    regle = _safe(p.get("regle", ""))
+                    lines.append(f"{who} : brut {euro(brut)} €/mois → pris en compte {euro(pris)} €/mois ({regle})")
 
             if detail_deb:
                 lines.append(f"Débiteurs (déduction {euro(taux)} €/mois appliquée individuellement) :")
