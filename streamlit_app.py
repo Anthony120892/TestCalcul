@@ -1526,7 +1526,7 @@ def make_decision_pdf_cpas(
         avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
         
         story.append(Spacer(1, 4))
-        story.append(bullets([
+        #story.append(bullets([
             #f"Prestations familiales : {euro(pf_ann)} € (annuel) [= {euro(float(res_seg.get('prestations_familiales_a_compter_mensuel',0)))} €/mois × 12]",
             #f"Avantage en nature logement (ménage) : {euro(avn_ann)} € (annuel) [= {euro(float(res_seg.get('avantage_nature_logement_mensuel',0)))} €/mois × 12]",
         
@@ -1538,7 +1538,9 @@ def make_decision_pdf_cpas(
         
         bul = []
 
-        if pf_ann > 0:
+        #if pf_ann > 0:
+        if pf_ann > EPS:
+
             bul.append(f"Prestations familiales : {euro(pf_ann)} € (annuel)")
 
         if avn_ann > 0:
