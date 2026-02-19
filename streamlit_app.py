@@ -1329,7 +1329,7 @@ def make_decision_pdf_cpas(
 
     # --- Rendu détail capitaux / immo / cession (depuis un dict "res-like") ---
     def render_capitaux_detail_from(det: dict, annuel: float, title: str):
-         details = (res_seg or {}).get("details_capitaux") or []
+        details = (res_seg or {}).get("details_capitaux") or []
         if montant_annuel <= 0 and len(details) == 0:
             return
         #if annuel <= 0 and float(det.get("total_capital", 0.0)) <= 0:
