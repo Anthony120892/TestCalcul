@@ -2488,7 +2488,8 @@ if multi_mode:
                 res_ms["debug_deg1"] = art34_adv.get("debug_deg1")
                 res_ms["debug_deg2"] = art34_adv.get("debug_deg2")
                 res_ms["ris_injecte_mensuel"] = art34_adv.get("ris_injecte_mensuel", 0.0)
-                res_seg["taux_a_laisser_mensuel"] = res_ms.get("taux_a_laisser_mensuel", taux_art34)
+                res_ms["taux_a_laisser_mensuel"] = float(res_ms.get("taux_a_laisser_mensuel", taux_art34))
+                
 
 
                 # recalcul totaux + RI
