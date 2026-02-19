@@ -2279,9 +2279,9 @@ if multi_mode:
 
         nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=3, step=1, key="nb_autres_membres")
         for j in range(int(nb_autres)):
-            is_art34 = c3.checkbox("Candidat art.34", value=True, key=f"mem_art34_{j}")
             st.markdown(f"**Autre membre {j+1}**")
             c1, c2, c3 = st.columns([2, 1, 1])
+            is_art34 = c3.checkbox("Candidat art.34", value=True, key=f"mem_art34_{j}")
             mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
             name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
             #rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"mem_rev_{j}", default=0.0, step=100.0)
