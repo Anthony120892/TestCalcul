@@ -2144,7 +2144,29 @@ if multi_mode:
             c1, c2, c3 = st.columns([2, 1, 1])
             mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
             name = c1.text_input("Nom (optionnel)", value="", key=f"mem_name_{j}")
-            rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"mem_rev_{j}", default=0.0, step=100.0)
+            #rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"mem_rev_{j}", default=0.0, step=100.0)
+            period = c2.selectbox(
+                "Période",
+                ["Annuel (€/an)", "Mensuel (€/mois)"],
+                key=f"mem_rev_{j}_period"
+            )
+
+            if period.startswith("Annuel"):
+                rev_annuel = c2.number_input(
+                    "Revenus nets (€/an)",
+                    min_value=0.0, value=0.0, step=100.0,
+                    key=f"mem_rev_{j}_val_a"
+                )
+            else:
+                rev_m = c2.number_input(
+                    "Revenus nets (€/mois)",
+                    min_value=0.0, value=0.0, step=50.0,
+                    key=f"mem_rev_{j}_val_m"
+                )
+                rev_annuel = float(rev_m) * 12.0
+
+            c2.caption(f"➡️ Retenu : {rev_annuel:.2f} €/an")
+
             excl = c3.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
             m = {"id": str(mid).strip(), "name": str(name).strip(), "revenu_net_annuel": float(rev_annuel), "exclure": bool(excl), "_source": "autre"}
             if m["id"]:
