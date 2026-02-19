@@ -2345,20 +2345,20 @@ if multi_mode:
                 key=f"d_{d['idx']}_deg2"
             )
             
-            d["art34_deg1_ids"] = c1.multiselect(
-                "Débiteurs 1er degré (cohabitants débiteurs d'aliments)",
-                options=ids_available,
-                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
-                default=[],
-                key=f"d_{d['idx']}_deg1"
-            )
-            d["art34_deg2_ids"] = c2.multiselect(
-                "Débiteurs 2e degré (si 1er degré = 0)",
-                options=ids_available,
-                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
-                default=[],
-                key=f"d_{d['idx']}_deg2"
-            )
+            #d["art34_deg1_ids"] = c1.multiselect(
+                #"Débiteurs 1er degré (cohabitants débiteurs d'aliments)",
+                #options=ids_available,
+                #format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                #default=[],
+                #key=f"d_{d['idx']}_deg1"
+            #)
+            #d["art34_deg2_ids"] = c2.multiselect(
+                #"Débiteurs 2e degré (si 1er degré = 0)",
+                #options=ids_available,
+                #format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                #default=[],
+                #key=f"d_{d['idx']}_deg2"
+            #)
             d["include_ris_from_dossiers"] = st.multiselect(
                 "Injection : ajouter le RI mensuel d’autres dossiers au groupe 1er degré (avant N×taux)",
                 options=[k for k in range(len(dossiers))],
