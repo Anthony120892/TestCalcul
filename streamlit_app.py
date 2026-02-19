@@ -1329,9 +1329,15 @@ def make_decision_pdf_cpas(
 
     # --- Rendu détail capitaux / immo / cession (depuis un dict "res-like") ---
     def render_capitaux_detail_from(det: dict, annuel: float, title: str):
-        details = (res_seg or {}).get("details_capitaux") or []
-        if montant_annuel <= 0 and len(details) == 0:
+        det = det or {}
+        details = det.get("tranches", []) or []
+        if float(annuel) <= 0 and len(details) == 0 and float(det.get("total_capital", 0.0)) <= 0:
             return
+
+    #def render_capitaux_detail_from(det: dict, annuel: float, title: str):
+        #details = (res_seg or {}).get("details_capitaux") or []
+        #if montant_annuel <= 0 and len(details) == 0:
+            #return
         #if annuel <= 0 and float(det.get("total_capital", 0.0)) <= 0:
             #story.append(Paragraph(f"{title} : aucun.", base))
             #return
@@ -1356,9 +1362,15 @@ def make_decision_pdf_cpas(
         story.append(Paragraph(f"<font size=9 color='grey'>Total à compter (annuel) : {euro(annuel)} €</font>", small))
 
     def render_immo_detail_from(det: dict, total: float, title: str):
-        details = (res_seg or {}).get("details_immo") or []
-        if montant_annuel <= 0 and len(details) == 0:
+        det = det or {}
+        details = det.get("details", []) or []
+        if float(total) <= 0 and len(details) == 0:
             return
+
+    #def render_immo_detail_from(det: dict, total: float, title: str):
+        #details = (res_seg or {}).get("details_immo") or []
+        #if montant_annuel <= 0 and len(details) == 0:
+            #return
         #if total <= 0 and not (det.get("details") or []):
             #story.append(Paragraph(f"{title} : aucun.", base))
             #return
