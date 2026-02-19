@@ -2063,6 +2063,49 @@ def ui_menage_common(prefix: str, nb_demandeurs: int, enable_pf_links: bool, sho
     answers["pf_links"] = pf_links
     return answers
 
+def ui_cohabitants_cascade(prefix: str) -> list[dict]:
+    st.caption("Encode les cohabitants et coche leur rôle (pour les retrouver dans le paramétrage par dossier).")
+
+    cohs = []
+    nb = st.number_input("Nombre de cohabitants à encoder", min_value=0, value=3, step=1, key=f"{prefix}_nb")
+
+    for i in range(int(nb)):
+        st.markdown(f"**Cohabitant {i+1}**")
+        c1, c2, c3 = st.columns([2.2, 1.2, 1])
+
+        mid = c1.text_input("ID (court, unique) ex: X, Y, M1", value=f"M{i+1}", key=f"{prefix}_id_{i}")
+        name = c1.text_input("Nom (optionnel)", value="", key=f"{prefix}_name_{i}")
+
+        period = c2.selectbox("Période revenus", ["Annuel (€/an)", "Mensuel (€/mois)"], key=f"{prefix}_p_{i}")
+        if period.startswith("Annuel"):
+            rev_annuel = c2.number_input("Revenus nets (€/an)", min_value=0.0, value=0.0, step=100.0, key=f"{prefix}_ra_{i}")
+        else:
+            rev_m = c2.number_input("Revenus nets (€/mois)", min_value=0.0, value=0.0, step=50.0, key=f"{prefix}_rm_{i}")
+            rev_annuel = float(rev_m) * 12.0
+        c2.caption(f"➡️ Retenu : {rev_annuel:.2f} €/an")
+
+        excl = c3.checkbox("Exclure", value=False, key=f"{prefix}_ex_{i}")
+
+        st.markdown("**Rôle(s) pour la cascade**")
+        r1, r2, r3 = st.columns(3)
+        is_partenaire = r1.checkbox("Partenaire", value=False, key=f"{prefix}_part_{i}")
+        is_deg1 = r2.checkbox("Débiteur 1er degré", value=False, key=f"{prefix}_d1_{i}")
+        is_deg2 = r3.checkbox("Débiteur 2e degré", value=False, key=f"{prefix}_d2_{i}")
+
+        m = {
+            "id": str(mid).strip(),
+            "name": str(name).strip(),
+            "revenu_net_annuel": float(rev_annuel),
+            "exclure": bool(excl),
+            "tag_partenaire": bool(is_partenaire),
+            "tag_deg1": bool(is_deg1),
+            "tag_deg2": bool(is_deg2),
+            "_source": "cohabitant",
+        }
+        if m["id"]:
+            cohs.append(m)
+
+    return cohs
 # jusqu'ici 
 def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> float:
     return float(revenus_annuels_apres_exonerations(rev_list or [], cfg_soc, cfg_ale))
@@ -2070,17 +2113,38 @@ def annual_from_revenus_list(rev_list: list, cfg_soc: dict, cfg_ale: dict) -> fl
 # ============================================================
 # MODE DOSSIER (SINGLE / MULTI)
 # ============================================================
-st.subheader("Mode dossier")
-multi_mode = st.checkbox("Plusieurs demandes RIS — comparer / calculer un ménage", value=False)
+#st.subheader("Mode dossier")
+#multi_mode = st.checkbox("Plusieurs demandes RIS — comparer / calculer un ménage", value=False)
+st.subheader("Choix du mode")
 
+mode_global = st.radio(
+    "Que veux-tu faire ?",
+    ["Mode simple", "Mode Débiteurs#cascade"],
+    index=0,
+)
+
+mode_cascade = (mode_global == "Mode Débiteurs#cascade")
+
+# Dans les 2 cas, on peut avoir 1 ou plusieurs dossiers
+multi_mode = st.checkbox("Plusieurs dossiers", value=False)
+
+st.divider()
 # ------------------------------------------------------------
 # MODE MULTI
 # ------------------------------------------------------------
+#if multi_mode:
+    #st.subheader("Choix du mode multi")
+    #advanced_household = True
+    #st.info("Mode multi : ménage avancé activé (cascade art.34).")
 if multi_mode:
-    st.subheader("Choix du mode multi")
-    advanced_household = True
-    st.info("Mode multi : ménage avancé activé (cascade art.34).")
-
+    if mode_cascade:
+        st.subheader("Mode Débiteurs#cascade — plusieurs dossiers")
+        advanced_household = True
+        st.info("Tu es en mode Débiteurs#cascade.")
+    else:
+        st.subheader("Mode simple — plusieurs dossiers")
+        advanced_household = False
+        st.info("Tu es en mode simple.")
     #st.subheader("Choix du mode multi")
     #advanced_household = st.checkbox(
         #"Ménage avancé (cascade art.34 : priorité 1er degré -> 2e degré + pool)",
@@ -2164,15 +2228,18 @@ if multi_mode:
             "include_ris_from_dossiers": [],
         })
 
-    with st.expander("Cohabitants admissibles (art.34) — ménage (commun)", expanded=False):
-        menage_common = ui_menage_common(
-            "hd_menage",
-            nb_demandeurs=int(nb_dem),
-            enable_pf_links=True,
-            show_simple_art34=not advanced_household
-        )
-
-    #with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
+  
+    if not advanced_household:
+        with st.expander("Cohabitants admissibles (art.34) — ménage", expanded=False):
+            menage_common = ui_menage_common(
+                "hd_menage",
+                nb_demandeurs=int(nb_dem),
+                enable_pf_links=True,
+                show_simple_art34=True
+            )
+    else:
+        menage_common = {}  # en cascade, on ne passe pas par ce mode simple
+      #with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
         #pat_common_ui = ui_patrimoine_like_simple(prefix="hd_menage_pat_common")
 
     # ✅ on fusionne dans un seul dict “ménage commun”
@@ -2256,6 +2323,22 @@ if multi_mode:
         for d in dossiers:
             st.markdown(f"### {d['label']} — art.34")
             c1, c2 = st.columns(2)
+            d["art34_deg1_ids"] = c1.multiselect(
+                "Débiteurs 1er degré",
+                options=ids_available,
+                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                default=deg1_defaults,
+                key=f"d_{d['idx']}_deg1"
+            )
+
+            d["art34_deg2_ids"] = c2.multiselect(
+                "Débiteurs 2e degré (si 1er degré = 0)",
+                options=ids_available,
+                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                default=deg2_defaults,
+                key=f"d_{d['idx']}_deg2"
+            )
+            
             d["art34_deg1_ids"] = c1.multiselect(
                 "Débiteurs 1er degré (cohabitants débiteurs d'aliments)",
                 options=ids_available,
@@ -2460,12 +2543,13 @@ if multi_mode:
 
 else:
     st.subheader("Mode SIMPLE (single dossier)")
+    advanced_single = mode_cascade
 
     # Choix (facultatif) : si tu veux aussi offrir le ménage avancé en single
-    advanced_single = st.checkbox(
-        "Activer ménage avancé (cascade art.34) en single",
-        value=False
-    )
+    #advanced_single = st.checkbox(
+        #"Activer ménage avancé (cascade art.34) en single",
+        #value=False
+    #)
 
     # --- Dossier ---
     st.markdown("### A) Demande")
@@ -2534,25 +2618,64 @@ else:
             id1 = "A"
             name1 = demandeur_nom.strip() or "Demandeur A"
             rev1_ann_calc = annual_from_revenus_list(rev1, cfg["socio_prof"], cfg["ale"])
-            members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann_calc), "exclure": False, "_source": "demandeur"})
+            #members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann_calc), "exclure": False, "_source": "demandeur"})
             # Conjoint B (si couple)
             if is_couple:
                 id2 = "B"
                 name2 = demandeur2_nom.strip() or "Demandeur B"
                 rev2_ann_calc = annual_from_revenus_list(rev2, cfg["socio_prof"], cfg["ale"])
-                members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann_calc), "exclure": False, "_source": "demandeur"})
+                #members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann_calc), "exclure": False, "_source": "demandeur"})
 
-        nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=2, step=1, key="s_nb_autres")
-        for j in range(int(nb_autres)):
-            st.markdown(f"**Autre membre {j+1}**")
-            c1, c2, c3 = st.columns([2, 1, 1])
-            mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"s_mem_id_{j}")
-            name = c1.text_input("Nom (optionnel)", value="", key=f"s_mem_name_{j}")
-            rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"s_mem_rev_{j}", default=0.0, step=100.0)
-            excl = c3.checkbox("Exclure (équité)", value=False, key=f"s_mem_excl_{j}")
-            m = {"id": str(mid).strip(), "name": str(name).strip(), "revenu_net_annuel": float(rev_annuel), "exclure": bool(excl), "_source": "autre"}
-            if m["id"]:
-                members.append(m)
+        #nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=2, step=1, key="s_nb_autres")
+        #for j in range(int(nb_autres)):
+            #st.markdown(f"**Autre membre {j+1}**")
+            #c1, c2, c3 = st.columns([2, 1, 1])
+            #mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"s_mem_id_{j}")
+            #name = c1.text_input("Nom (optionnel)", value="", key=f"s_mem_name_{j}")
+            #rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"s_mem_rev_{j}", default=0.0, step=100.0)
+            #excl = c3.checkbox("Exclure (équité)", value=False, key=f"s_mem_excl_{j}")
+            #m = {"id": str(mid).strip(), "name": str(name).strip(), "revenu_net_annuel": float(rev_annuel), "exclure": bool(excl), "_source": "autre"}
+            #if m["id"]:
+                #members.append(m)
+            # Cohabitants encodés + tags débiteurs
+        with st.expander("B) Cohabitants (mode Débiteurs#cascade)", expanded=True):
+            coh_members = ui_cohabitants_cascade(prefix="hd_coh")
+
+        members = []
+
+        # Préremplissage demandeurs (comme avant)
+        prefill_demandeurs = st.checkbox("Préremplir les demandeurs", value=True, key="prefill_dem")
+        if prefill_demandeurs:
+            for d in dossiers:
+                id1 = f"D{d['idx']+1}A"
+                name1 = (d.get("demandeur_nom") or "").strip() or f"Demandeur D{d['idx']+1}A"
+                rev1_ann = annual_from_revenus_list(d.get("revenus_demandeur_annuels", []), cfg["socio_prof"], cfg["ale"])
+                members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "_source": "demandeur",
+                                "tag_partenaire": False, "tag_deg1": False, "tag_deg2": False})
+                if bool(d.get("couple_demandeur", False)):
+                    id2 = f"D{d['idx']+1}B"
+                    name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
+                    rev2_ann = annual_from_revenus_list(d.get("revenus_conjoint_annuels", []), cfg["socio_prof"], cfg["ale"])
+                    members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann), "exclure": False, "_source": "demandeur",
+                                    "tag_partenaire": False, "tag_deg1": False, "tag_deg2": False})
+
+        # Ajout cohabitants encodés
+        members.extend(coh_members or [])
+
+        # Build members_by_id
+        members_by_id = {}
+        for m in members:
+            if m.get("exclure", False):
+                continue
+            if m.get("id"):
+                members_by_id[m["id"]] = m
+
+        household = {"members": members, "members_by_id": members_by_id}
+        ids_available = list(members_by_id.keys())
+
+        # Listes filtrées (pour defaults)
+        deg1_defaults = [mid for mid in ids_available if members_by_id[mid].get("tag_deg1")]
+        deg2_defaults = [mid for mid in ids_available if members_by_id[mid].get("tag_deg2")]
 
         members_by_id = {}
         for m in members:
