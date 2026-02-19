@@ -717,49 +717,132 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of=None) -> dic
     revenus_demandeur_annuels = r2(revenus_demandeur_annuels)
     revenus_conjoint_annuels = r2(revenus_conjoint_annuels)
 
-    cap_detail = capital_mobilier_calc(
-        total_capital=answers.get("capital_mobilier_total", 0.0),
-        compte_commun=answers.get("capital_compte_commun", False),
-        nb_titulaires=answers.get("capital_nb_titulaires", 1),
+    #cap_detail = capital_mobilier_calc(
+        #total_capital=answers.get("capital_mobilier_total", 0.0),
+        #compte_commun=answers.get("capital_compte_commun", False),
+        #nb_titulaires=answers.get("capital_nb_titulaires", 1),
+        #categorie=cat,
+        #conjoint_compte_commun=answers.get("capital_conjoint_cotitulaire", False),
+        #part_fraction_custom=answers.get("capital_fraction", 1.0),
+        #cfg_cap=cfg["capital_mobilier"]
+    #)
+    #cap_ann = r2(cap_detail["annuel"])
+
+    #immo_detail = immo_calc_total(
+        #biens=answers.get("biens_immobiliers", []),
+        #enfants=answers.get("enfants_a_charge", 0),
+        #cfg_immo=cfg["immo"]
+    #)
+    #immo_ann = r2(immo_detail["total_annuel"])
+
+    #ces_detail = cession_biens_calc(
+        #cessions=answers.get("cessions", []),
+        #cas_particulier_tranche_37200=answers.get("cession_cas_particulier_37200", False),
+        #dettes_deductibles=answers.get("cession_dettes_deductibles", 0.0),
+        #abatt_cat=answers.get("cession_abatt_cat", "cat1"),
+        #abatt_mois_prorata=answers.get("cession_abatt_mois", 0),
+        #cfg_cession=cfg["cession"],
+        #cfg_cap=cfg["capital_mobilier"]
+    #)
+    #ces_ann = r2(ces_detail["annuel"])
+
+    # art.34 (mode simple)
+    #art34 = cohabitants_art34_part_mensuelle_cpas(
+        #cohabitants=answers.get("cohabitants_art34", []),
+        #taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
+        #partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
+        #nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
+        #as_of=as_of
+    #)
+
+    #pf_m = r2(max(0.0, float(answers.get("prestations_familiales_a_compter_mensuel", 0.0))))
+    #pf_ann = r2(pf_m * 12.0)
+
+    #avantage_nature_m = r2(max(0.0, float(answers.get("avantage_nature_logement_mensuel", 0.0))))
+    #avantage_nature_ann = r2(avantage_nature_m * 12.0)
+#ici
+        # ============================================================
+    # ✅ Patrimoine & avantages : MENAGE (commun) + PERSO (dossier)
+    # ============================================================
+    pat_common = _extract_patrimoine(answers.get("_patrimoine_common"))
+    pat_perso  = _extract_patrimoine(answers.get("_patrimoine_perso"))
+
+    # --- Capitaux mobiliers ---
+    cap_common_detail = capital_mobilier_calc(
+        total_capital=pat_common.get("capital_mobilier_total", 0.0),
+        compte_commun=pat_common.get("capital_compte_commun", False),
+        nb_titulaires=pat_common.get("capital_nb_titulaires", 1),
         categorie=cat,
-        conjoint_compte_commun=answers.get("capital_conjoint_cotitulaire", False),
-        part_fraction_custom=answers.get("capital_fraction", 1.0),
+        conjoint_compte_commun=pat_common.get("capital_conjoint_cotitulaire", False),
+        part_fraction_custom=pat_common.get("capital_fraction", 1.0),
         cfg_cap=cfg["capital_mobilier"]
     )
-    cap_ann = r2(cap_detail["annuel"])
+    cap_common_ann = r2(cap_common_detail["annuel"])
 
-    immo_detail = immo_calc_total(
-        biens=answers.get("biens_immobiliers", []),
+    cap_perso_detail = capital_mobilier_calc(
+        total_capital=pat_perso.get("capital_mobilier_total", 0.0),
+        compte_commun=pat_perso.get("capital_compte_commun", False),
+        nb_titulaires=pat_perso.get("capital_nb_titulaires", 1),
+        categorie=cat,
+        conjoint_compte_commun=pat_perso.get("capital_conjoint_cotitulaire", False),
+        part_fraction_custom=pat_perso.get("capital_fraction", 1.0),
+        cfg_cap=cfg["capital_mobilier"]
+    )
+    cap_perso_ann = r2(cap_perso_detail["annuel"])
+
+    cap_ann = r2(cap_common_ann + cap_perso_ann)
+
+    # --- Immobilier ---
+    immo_common_detail = immo_calc_total(
+        biens=pat_common.get("biens_immobiliers", []),
         enfants=answers.get("enfants_a_charge", 0),
         cfg_immo=cfg["immo"]
     )
-    immo_ann = r2(immo_detail["total_annuel"])
+    immo_common_ann = r2(immo_common_detail["total_annuel"])
 
-    ces_detail = cession_biens_calc(
-        cessions=answers.get("cessions", []),
-        cas_particulier_tranche_37200=answers.get("cession_cas_particulier_37200", False),
-        dettes_deductibles=answers.get("cession_dettes_deductibles", 0.0),
-        abatt_cat=answers.get("cession_abatt_cat", "cat1"),
-        abatt_mois_prorata=answers.get("cession_abatt_mois", 0),
+    immo_perso_detail = immo_calc_total(
+        biens=pat_perso.get("biens_immobiliers", []),
+        enfants=answers.get("enfants_a_charge", 0),
+        cfg_immo=cfg["immo"]
+    )
+    immo_perso_ann = r2(immo_perso_detail["total_annuel"])
+
+    immo_ann = r2(immo_common_ann + immo_perso_ann)
+
+    # --- Cession de biens ---
+    ces_common_detail = cession_biens_calc(
+        cessions=pat_common.get("cessions", []),
+        cas_particulier_tranche_37200=pat_common.get("cession_cas_particulier_37200", False),
+        dettes_deductibles=pat_common.get("cession_dettes_deductibles", 0.0),
+        abatt_cat=pat_common.get("cession_abatt_cat", "cat1"),
+        abatt_mois_prorata=pat_common.get("cession_abatt_mois", 0),
         cfg_cession=cfg["cession"],
         cfg_cap=cfg["capital_mobilier"]
     )
-    ces_ann = r2(ces_detail["annuel"])
+    ces_common_ann = r2(ces_common_detail["annuel"])
 
-    # art.34 (mode simple)
-    art34 = cohabitants_art34_part_mensuelle_cpas(
-        cohabitants=answers.get("cohabitants_art34", []),
-        taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
-        partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
-        nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
-        as_of=as_of
+    ces_perso_detail = cession_biens_calc(
+        cessions=pat_perso.get("cessions", []),
+        cas_particulier_tranche_37200=pat_perso.get("cession_cas_particulier_37200", False),
+        dettes_deductibles=pat_perso.get("cession_dettes_deductibles", 0.0),
+        abatt_cat=pat_perso.get("cession_abatt_cat", "cat1"),
+        abatt_mois_prorata=pat_perso.get("cession_abatt_mois", 0),
+        cfg_cession=cfg["cession"],
+        cfg_cap=cfg["capital_mobilier"]
     )
+    ces_perso_ann = r2(ces_perso_detail["annuel"])
 
-    pf_m = r2(max(0.0, float(answers.get("prestations_familiales_a_compter_mensuel", 0.0))))
-    pf_ann = r2(pf_m * 12.0)
+    ces_ann = r2(ces_common_ann + ces_perso_ann)
 
-    avantage_nature_m = r2(max(0.0, float(answers.get("avantage_nature_logement_mensuel", 0.0))))
+    # --- Avantage en nature ---
+    avantage_common_m = r2(max(0.0, float(pat_common.get("avantage_nature_logement_mensuel", 0.0))))
+    avantage_perso_m  = r2(max(0.0, float(pat_perso.get("avantage_nature_logement_mensuel", 0.0))))
+    avantage_nature_m = r2(avantage_common_m + avantage_perso_m)
+
+    avantage_common_ann = r2(avantage_common_m * 12.0)
+    avantage_perso_ann  = r2(avantage_perso_m * 12.0)
     avantage_nature_ann = r2(avantage_nature_m * 12.0)
+#jusqu'ici 
 
     total_demandeur_avant_annuel = r2(
         revenus_demandeur_annuels
@@ -791,17 +874,41 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of=None) -> dic
         "nb_enfants_jeunes_demandeurs": int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
         "revenus_demandeur_annuels": float(revenus_demandeur_annuels),
         "revenus_conjoint_annuels": float(revenus_conjoint_annuels),
+        #"capitaux_mobiliers_annuels": float(cap_ann),
+        #"capitaux_mobiliers_detail": cap_detail,
+        #"immo_annuels": float(immo_ann),
+        #"immo_detail": immo_detail,
+        #"cession_biens_annuelle": float(ces_ann),
+        #"cession_detail": ces_detail,
+        # ✅ Totaux + détails patrimoine (commun / perso)
         "capitaux_mobiliers_annuels": float(cap_ann),
-        "capitaux_mobiliers_detail": cap_detail,
+        "capitaux_mobiliers_annuels_common": float(cap_common_ann),
+        "capitaux_mobiliers_annuels_perso": float(cap_perso_ann),
+        "capitaux_mobiliers_detail_common": cap_common_detail,
+        "capitaux_mobiliers_detail_perso": cap_perso_detail,
+
         "immo_annuels": float(immo_ann),
-        "immo_detail": immo_detail,
+        "immo_annuels_common": float(immo_common_ann),
+        "immo_annuels_perso": float(immo_perso_ann),
+        "immo_detail_common": immo_common_detail,
+        "immo_detail_perso": immo_perso_detail,
+
         "cession_biens_annuelle": float(ces_ann),
-        "cession_detail": ces_detail,
+        "cession_biens_annuelle_common": float(ces_common_ann),
+        "cession_biens_annuelle_perso": float(ces_perso_ann),
+        "cession_detail_common": ces_common_detail,
+        "cession_detail_perso": ces_perso_detail,
         **art34,
         "prestations_familiales_a_compter_mensuel": float(pf_m),
         "prestations_familiales_a_compter_annuel": float(pf_ann),
         "avantage_nature_logement_mensuel": float(avantage_nature_m),
         "avantage_nature_logement_annuel": float(avantage_nature_ann),
+        "avantage_nature_logement_mensuel_common": float(avantage_common_m),
+        "avantage_nature_logement_mensuel_perso": float(avantage_perso_m),
+        "avantage_nature_logement_annuel_common": float(avantage_common_ann),
+        "avantage_nature_logement_annuel_perso": float(avantage_perso_ann),
+        #"avantage_nature_logement_mensuel": float(avantage_nature_m),
+        #"avantage_nature_logement_annuel": float(avantage_nature_ann),
         "total_ressources_demandeur_avant_immunisation_annuel": float(total_demandeur_avant_annuel),
         "total_ressources_cohabitants_annuel": float(total_cohabitants_annuel),
         "total_ressources_avant_immunisation_simple_annuel": float(total_avant_annuel),
@@ -1336,19 +1443,50 @@ def make_decision_pdf_cpas(
         if bool(answers_snapshot.get("couple_demandeur", False)):
             _ = render_revenus_block("Revenus conjoint (si demande couple)", answers_snapshot.get("revenus_conjoint_annuels", []))
 
-        story.append(Spacer(1, 4))
-        render_capitaux_detail_from(res_seg.get("capitaux_mobiliers_detail") or {}, float(res_seg.get("capitaux_mobiliers_annuels", 0.0)), "Capitaux mobiliers (ménage)")
-        story.append(Spacer(1, 4))
-        render_immo_detail_from(res_seg.get("immo_detail") or {}, float(res_seg.get("immo_annuels", 0.0)), "Immobilier (RC) (ménage)")
-        story.append(Spacer(1, 4))
-        render_cession_detail_from(res_seg.get("cession_detail") or {}, float(res_seg.get("cession_biens_annuelle", 0.0)), "Cession de biens (ménage)")
+        #story.append(Spacer(1, 4))
+        #render_capitaux_detail_from(res_seg.get("capitaux_mobiliers_detail") or {}, float(res_seg.get("capitaux_mobiliers_annuels", 0.0)), "Capitaux mobiliers (ménage)")
+        #story.append(Spacer(1, 4))
+        #render_immo_detail_from(res_seg.get("immo_detail") or {}, float(res_seg.get("immo_annuels", 0.0)), "Immobilier (RC) (ménage)")
+        #story.append(Spacer(1, 4))
+        #render_cession_detail_from(res_seg.get("cession_detail") or {}, float(res_seg.get("cession_biens_annuelle", 0.0)), "Cession de biens (ménage)")
 
+        # ✅ Patrimoine : commun vs perso (affichage conditionnel)
+        cap_c = float(res_seg.get("capitaux_mobiliers_annuels_common", 0.0))
+        cap_p = float(res_seg.get("capitaux_mobiliers_annuels_perso", 0.0))
+        render_capitaux_detail_from(res_seg.get("capitaux_mobiliers_detail_common") or {}, cap_c, "Capitaux mobiliers (ménage — commun)")
+        if cap_p > 0 or float((res_seg.get("capitaux_mobiliers_detail_perso") or {}).get("total_capital", 0.0)) > 0:
+            story.append(Spacer(1, 4))
+            render_capitaux_detail_from(res_seg.get("capitaux_mobiliers_detail_perso") or {}, cap_p, "Capitaux mobiliers (personnels — dossier)")
+
+        story.append(Spacer(1, 4))
+        im_c = float(res_seg.get("immo_annuels_common", 0.0))
+        im_p = float(res_seg.get("immo_annuels_perso", 0.0))
+        render_immo_detail_from(res_seg.get("immo_detail_common") or {}, im_c, "Immobilier (RC) (ménage — commun)")
+        if im_p > 0 or ((res_seg.get("immo_detail_perso") or {}).get("details") or []):
+            story.append(Spacer(1, 4))
+            render_immo_detail_from(res_seg.get("immo_detail_perso") or {}, im_p, "Immobilier (RC) (personnels — dossier)")
+
+        story.append(Spacer(1, 4))
+        ce_c = float(res_seg.get("cession_biens_annuelle_common", 0.0))
+        ce_p = float(res_seg.get("cession_biens_annuelle_perso", 0.0))
+        render_cession_detail_from(res_seg.get("cession_detail_common") or {}, ce_c, "Cession de biens (ménage — commun)")
+        if ce_p > 0 or ((res_seg.get("cession_detail_perso") or {}).get("details_cessions") or []):
+            story.append(Spacer(1, 4))
+            render_cession_detail_from(res_seg.get("cession_detail_perso") or {}, ce_p, "Cession de biens (personnels — dossier)")
+
+        
         pf_ann = float(res_seg.get("prestations_familiales_a_compter_annuel", 0.0))
         avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
         story.append(Spacer(1, 4))
         story.append(bullets([
             f"Prestations familiales : {euro(pf_ann)} € (annuel) [= {euro(float(res_seg.get('prestations_familiales_a_compter_mensuel',0)))} €/mois × 12]",
-            f"Avantage en nature logement (ménage) : {euro(avn_ann)} € (annuel) [= {euro(float(res_seg.get('avantage_nature_logement_mensuel',0)))} €/mois × 12]",
+            #f"Avantage en nature logement (ménage) : {euro(avn_ann)} € (annuel) [= {euro(float(res_seg.get('avantage_nature_logement_mensuel',0)))} €/mois × 12]",
+            avn_c_ann = float(res_seg.get("avantage_nature_logement_annuel_common", 0.0))
+            avn_p_ann = float(res_seg.get("avantage_nature_logement_annuel_perso", 0.0))
+            avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
+            f"Avantage en nature logement : {euro(avn_ann)} € (annuel) "
+            f"[commun {euro(avn_c_ann)} € + perso {euro(avn_p_ann)} €]",
+
         ]))
 
         story.append(Spacer(1, 8))
@@ -1518,6 +1656,7 @@ def ui_revenus_block(prefix: str) -> list:
 # ============================================================
 # ✅ “patrimoine like mode simple” (4 blocs)
 # ============================================================
+
 def ui_patrimoine_like_simple(prefix: str) -> dict:
     out = {}
 
@@ -1612,6 +1751,53 @@ def ui_patrimoine_like_simple(prefix: str) -> dict:
     )
 
     return out
+
+# ============================================================
+# ✅ Patrimoine : ménage (commun) + perso (par dossier)
+#    -> on calcule chaque bloc séparément (seuils propres) puis on additionne.
+# ============================================================
+PATRIMOINES_KEYS = {
+    # capitaux
+    "capital_mobilier_total", "capital_compte_commun", "capital_nb_titulaires",
+    "capital_conjoint_cotitulaire", "capital_fraction",
+    # immo
+    "biens_immobiliers",
+    # cession
+    "cessions", "cession_cas_particulier_37200", "cession_dettes_deductibles",
+    "cession_abatt_cat", "cession_abatt_mois",
+    # avantage nature
+    "avantage_nature_logement_mensuel",
+}
+
+def _pat_default() -> dict:
+    return {
+        "capital_mobilier_total": 0.0,
+        "capital_compte_commun": False,
+        "capital_nb_titulaires": 1,
+        "capital_conjoint_cotitulaire": False,
+        "capital_fraction": 1.0,
+        "biens_immobiliers": [],
+        "cessions": [],
+        "cession_cas_particulier_37200": False,
+        "cession_dettes_deductibles": 0.0,
+        "cession_abatt_cat": "cat1",
+        "cession_abatt_mois": 0,
+        "avantage_nature_logement_mensuel": 0.0,
+    }
+
+def _extract_patrimoine(d: dict | None) -> dict:
+    base = _pat_default()
+    d = d or {}
+    for k in PATRIMOINES_KEYS:
+        if k in d:
+            base[k] = d[k]
+    # sécurisations minimales
+    base["biens_immobiliers"] = list(base.get("biens_immobiliers") or [])
+    base["cessions"] = list(base.get("cessions") or [])
+    base["capital_mobilier_total"] = float(base.get("capital_mobilier_total") or 0.0)
+    base["avantage_nature_logement_mensuel"] = float(base.get("avantage_nature_logement_mensuel") or 0.0)
+    return base
+
 
 # ============================================================
 # UI Ménage commun (mode simple art34 + 4 blocs)
@@ -1753,6 +1939,9 @@ if multi_mode:
             key=f"hd_pf_{i}"
         )
 
+        with st.expander("Patrimoine & ressources PERSONNELS (ce dossier)", expanded=False):
+            pat_perso = ui_patrimoine_like_simple(prefix=f"hd_pat_perso_{i}")
+
         share_art34 = False
         if advanced_household:
             share_art34 = st.checkbox(
@@ -1773,6 +1962,7 @@ if multi_mode:
             "revenus_demandeur_annuels": rev1,
             "revenus_conjoint_annuels": rev2 if is_couple else [],
             "prestations_familiales_a_compter_mensuel": float(pf_m),
+            "patrimoine_perso": pat_perso,
             "share_art34": bool(share_art34),
             "art34_deg1_ids": [],
             "art34_deg2_ids": [],
@@ -1890,6 +2080,10 @@ if multi_mode:
             # answers = ménage commun + dossier
             answers = {}
             answers.update(menage_common or {})
+            # ✅ Patrimoine commun vs perso
+            answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
+            answers["_patrimoine_perso"]  = _extract_patrimoine(d.get("patrimoine_perso") or {})
+
             answers.update({
                 "categorie": d["categorie"],
                 "enfants_a_charge": int(d["enfants_a_charge"]),
@@ -2164,6 +2358,9 @@ else:
         # answers = ménage commun + dossier
         answers = {}
         answers.update(menage_common or {})
+        answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
+        answers["_patrimoine_perso"]  = _extract_patrimoine({})   # single : si tu veux, tu peux aussi ajouter un expander “perso”
+
         answers.update({
             "categorie": cat,
             "enfants_a_charge": int(enfants),
