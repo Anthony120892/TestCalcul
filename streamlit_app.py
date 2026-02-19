@@ -1395,7 +1395,7 @@ def make_decision_pdf_cpas(
         if total <= 0 and len(details) == 0:
             return  # ✅ n'affiche rien du tout
 
-    # ... le reste de ta fonction (tableau, puces, tranches, etc.)
+        # ... le reste de ta fonction (tableau, puces, tranches, etc.)
 
 
         story.append(Paragraph(f"{title} — détail :", h3))
