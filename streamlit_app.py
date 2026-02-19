@@ -431,12 +431,19 @@ def cohabitant_is_active_asof(c: dict, as_of: date) -> bool:
 
 def _coh_display_name(c: dict) -> str:
     return (c.get("name") or c.get("nom") or c.get("label") or "").strip()
-
+    
 def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
                                          taux_a_laisser_mensuel: float,
+                                         categorie: str,
                                          partage_active: bool,
                                          nb_demandeurs_a_partager: int,
                                          as_of: date) -> dict:
+
+#def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
+                                         #taux_a_laisser_mensuel: float,
+                                         #partage_active: bool,
+                                         #nb_demandeurs_a_partager: int,
+                                         #as_of: date) -> dict:
     taux = max(0.0, float(taux_a_laisser_mensuel))
 
     revenus_partenaire_m = 0.0
@@ -460,27 +467,49 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
         revenu_ann = max(0.0, float(c.get("revenu_net_annuel", 0.0)))
         revenu_m = revenu_ann / 12.0
         nom = _coh_display_name(c)
-
+        
         if typ == "partenaire":
-            revenus_partenaire_m += revenu_m
+            # Règle CPAS : en cohab/isolé -> on ne compte que la partie > taux cohab
+            # en fam_charge -> on compte tout
+            if (categorie or "").strip().lower() == "fam_charge":
+                compte_m = revenu_m
+                mode = "fam_charge: 100% pris en compte"
+            else:
+                compte_m = max(0.0, revenu_m - taux)
+                mode = f"cohab/isolé: max(0, revenu - taux_cohab)"
+
+            revenus_partenaire_m += compte_m
             nb_partenaire += 1
-            detail_partenaire.append({"type": "partenaire", "name": nom, "mensuel": r2(revenu_m), "annuel": r2(revenu_ann)})
-
-        elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
-            revenus_debiteurs_m_brut += revenu_m
-            nb_debiteurs += 1
-
-            excedent_m = max(0.0, revenu_m - taux)
-            debiteurs_excedents_m_total += excedent_m
-
-            detail_debiteurs.append({
-                "type": typ,
+            detail_partenaire.append({
+                "type": "partenaire",
                 "name": nom,
-                "mensuel": r2(revenu_m),
-                "annuel": r2(revenu_ann),
+                "mensuel_brut": r2(revenu_m),
                 "taux_a_laisser_mensuel": r2(taux),
-                "excedent_mensuel_apres_deduction": r2(excedent_m),
+                "mensuel_pris_en_compte": r2(compte_m),
+                "regle": mode,
+                "annuel": r2(revenu_ann),
             })
+
+        #if typ == "partenaire":
+            #revenus_partenaire_m += revenu_m
+            #nb_partenaire += 1
+            #detail_partenaire.append({"type": "partenaire", "name": nom, "mensuel": r2(revenu_m), "annuel": r2(revenu_ann)})
+
+        #elif typ in {"debiteur_direct_1", "debiteur_direct_2"}:
+            #revenus_debiteurs_m_brut += revenu_m
+            #nb_debiteurs += 1
+
+            #excedent_m = max(0.0, revenu_m - taux)
+            #debiteurs_excedents_m_total += excedent_m
+
+            #detail_debiteurs.append({
+                #"type": typ,
+                #"name": nom,
+                #"mensuel": r2(revenu_m),
+                #"annuel": r2(revenu_ann),
+                #"taux_a_laisser_mensuel": r2(taux),
+                #"excedent_mensuel_apres_deduction": r2(excedent_m),
+            #})
 
     debiteurs_excedents_m_total = r2(debiteurs_excedents_m_total)
 
@@ -851,13 +880,22 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of=None) -> dic
     pf_ann = r2(pf_m * 12.0)
 
     # --- Art.34 (mode simple) ---
+   # art34 = cohabitants_art34_part_mensuelle_cpas(
+        #cohabitants=answers.get("cohabitants_art34", []),
+        #taux_a_laisser_mensuel=float(cfg["art34"].get("taux_a_laisser_mensuel", 0.0)),
+        #partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
+        #nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
+        #as_of=as_of
+    #)
     art34 = cohabitants_art34_part_mensuelle_cpas(
         cohabitants=answers.get("cohabitants_art34", []),
         taux_a_laisser_mensuel=float(cfg["art34"].get("taux_a_laisser_mensuel", 0.0)),
+        categorie=cat,
         partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
         nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
         as_of=as_of
     )
+
 
         # --- Prestations familiales (PF) ---
     #pf_m = r2(max(0.0, float(answers.get("prestations_familiales_a_compter_mensuel", 0.0))))
