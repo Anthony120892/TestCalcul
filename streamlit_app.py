@@ -2035,5 +2035,268 @@ if multi_mode:
                 )
 
 else:
-    st.info("Mode SINGLE non réécrit ici pour rester fidèle à ta demande (focus ménage avancé). "
-            "Si tu veux, je te recolle aussi le SINGLE avec la même logique cascade, mais tu m’avais demandé surtout le multi/ménage avancé.")
+    st.subheader("Mode SIMPLE (single dossier)")
+
+    # Choix (facultatif) : si tu veux aussi offrir le ménage avancé en single
+    advanced_single = st.checkbox(
+        "Activer ménage avancé (cascade art.34) en single",
+        value=False
+    )
+
+    # --- Dossier ---
+    st.markdown("### A) Demande")
+    demandeur_nom = st.text_input("Nom du demandeur", value="", key="s_dem_nom")
+    cat = st.selectbox(
+        "Catégorie RIS",
+        options=["cohab", "isole", "fam_charge"],
+        format_func=cat_label,
+        key="s_cat"
+    )
+    enfants = st.number_input("Enfants à charge", min_value=0, value=0, step=1, key="s_enf")
+    d_dem = st.date_input("Date de demande", value=date.today(), key="s_date")
+
+    is_couple = st.checkbox("Dossier COUPLE (2 demandeurs ensemble)", value=False, key="s_couple")
+    demandeur2_nom = ""
+    if is_couple:
+        demandeur2_nom = st.text_input("Nom du demandeur 2 (conjoint)", value="", key="s_dem2_nom")
+
+    st.markdown("**Revenus nets (demandeur 1)**")
+    rev1 = ui_revenus_block("s_rev1")
+
+    rev2 = []
+    if is_couple:
+        st.markdown("**Revenus nets (demandeur 2 / conjoint)**")
+        rev2 = ui_revenus_block("s_rev2")
+
+    st.markdown("**PF à compter (pour ce dossier)**")
+    pf_m = st.number_input(
+        "PF à compter (€/mois)",
+        min_value=0.0,
+        value=float(cfg["pf"].get("pf_mensuel_defaut", 0.0)),
+        step=10.0,
+        key="s_pf"
+    )
+
+    # --- Ménage commun (patrimoine + (art.34 simple si pas avancé)) ---
+    with st.expander("B) Ménage / Patrimoine (mode simple)", expanded=True):
+        menage_common = ui_menage_common(
+            prefix="s_menage",
+            nb_demandeurs=1,
+            enable_pf_links=False,                 # en single, pas besoin de liens PF vers plusieurs dossiers
+            show_simple_art34=not advanced_single  # ✅ si ménage avancé, on cache l’art.34 simple
+        )
+
+    # --- Ménage avancé en single (optionnel) ---
+    # On garde ta logique cascade/pool, mais en single ça revient à calculer une fois.
+    household = {"members": [], "members_by_id": {}}
+    d_adv = {
+        "idx": 0,
+        "label": "Dossier",
+        "share_art34": False,
+        "art34_deg1_ids": [],
+        "art34_deg2_ids": [],
+        "include_ris_from_dossiers": [],
+    }
+
+    if advanced_single:
+        st.divider()
+        st.subheader("C) Ménage avancé — Membres (IDs) & débiteurs art.34 (single)")
+
+        prefill = st.checkbox("Préremplir le(s) demandeur(s) comme membre(s)", value=True, key="s_prefill")
+
+        members = []
+        if prefill:
+            # Demandeur A
+            id1 = "A"
+            name1 = demandeur_nom.strip() or "Demandeur A"
+            rev1_ann_calc = annual_from_revenus_list(rev1, cfg["socio_prof"], cfg["ale"])
+            members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann_calc), "exclure": False, "_source": "demandeur"})
+            # Conjoint B (si couple)
+            if is_couple:
+                id2 = "B"
+                name2 = demandeur2_nom.strip() or "Demandeur B"
+                rev2_ann_calc = annual_from_revenus_list(rev2, cfg["socio_prof"], cfg["ale"])
+                members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann_calc), "exclure": False, "_source": "demandeur"})
+
+        nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=2, step=1, key="s_nb_autres")
+        for j in range(int(nb_autres)):
+            st.markdown(f"**Autre membre {j+1}**")
+            c1, c2, c3 = st.columns([2, 1, 1])
+            mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"s_mem_id_{j}")
+            name = c1.text_input("Nom (optionnel)", value="", key=f"s_mem_name_{j}")
+            rev_annuel, _p = ui_money_period_input("Revenus nets", key_prefix=f"s_mem_rev_{j}", default=0.0, step=100.0)
+            excl = c3.checkbox("Exclure (équité)", value=False, key=f"s_mem_excl_{j}")
+            m = {"id": str(mid).strip(), "name": str(name).strip(), "revenu_net_annuel": float(rev_annuel), "exclure": bool(excl), "_source": "autre"}
+            if m["id"]:
+                members.append(m)
+
+        members_by_id = {}
+        for m in members:
+            if m.get("exclure", False):
+                continue
+            if m.get("id"):
+                members_by_id[m["id"]] = m
+        household = {"members": members, "members_by_id": members_by_id}
+        ids_available = list(members_by_id.keys())
+
+        st.divider()
+        st.subheader("D) Paramétrage art.34 (cascade)")
+
+        c1, c2 = st.columns(2)
+        d_adv["art34_deg1_ids"] = c1.multiselect(
+            "Débiteurs 1er degré",
+            options=ids_available,
+            format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+            default=[],
+            key="s_deg1"
+        )
+        d_adv["art34_deg2_ids"] = c2.multiselect(
+            "Débiteurs 2e degré (si 1er degré = 0)",
+            options=ids_available,
+            format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+            default=[],
+            key="s_deg2"
+        )
+
+    # --- Calcul single ---
+    st.divider()
+    if st.button("Calculer (single)"):
+        # answers = ménage commun + dossier
+        answers = {}
+        answers.update(menage_common or {})
+        answers.update({
+            "categorie": cat,
+            "enfants_a_charge": int(enfants),
+            "date_demande": d_dem,
+            "couple_demandeur": bool(is_couple),
+            "demandeur_nom": str(demandeur_nom).strip(),
+            "revenus_demandeur_annuels": rev1,
+            "revenus_conjoint_annuels": rev2 if is_couple else [],
+            "prestations_familiales_a_compter_mensuel": float(pf_m),
+        })
+
+        # En ménage avancé: on ne veut pas l’art.34 simple
+        if advanced_single:
+            answers["cohabitants_art34"] = []
+
+        seg_first = compute_first_month_segments(answers, engine)
+        res_ms = seg_first.get("detail_mois_suivants", {}) or compute_officiel_cpas_annuel(answers, engine)
+
+        # appliquer cascade si activée
+        if advanced_single:
+            taux_art34 = float(cfg["art34"]["taux_a_laisser_mensuel"])
+            pools = {}
+            share_plan = {}      # single -> inutile, mais gardé
+            prior_results = []   # single -> vide (pas d’injection depuis autres dossiers)
+
+            besoin_m = float(res_ms.get("ris_theorique_mensuel", 0.0))
+
+            art34_adv = compute_art34_menage_avance_cascade(
+                dossier=d_adv,
+                household=household,
+                taux=taux_art34,
+                pools=pools,
+                share_plan=share_plan,
+                prior_results=prior_results,
+                besoin_m=besoin_m
+            )
+
+            # override art34
+            res_ms["art34_mode"] = art34_adv.get("art34_mode", "MENAGE_AVANCE_CASCADE")
+            res_ms["art34_degree_utilise"] = art34_adv.get("art34_degree_utilise", 0)
+            res_ms["cohabitants_part_a_compter_mensuel"] = float(art34_adv.get("cohabitants_part_a_compter_mensuel", 0.0))
+            res_ms["cohabitants_part_a_compter_annuel"] = float(art34_adv.get("cohabitants_part_a_compter_annuel", 0.0))
+            res_ms["debug_deg1"] = art34_adv.get("debug_deg1")
+            res_ms["debug_deg2"] = art34_adv.get("debug_deg2")
+            res_ms["ris_injecte_mensuel"] = art34_adv.get("ris_injecte_mensuel", 0.0)
+
+            # recalcul totaux + RI
+            total_dem = float(res_ms.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
+            total_coh = float(res_ms["cohabitants_part_a_compter_annuel"])
+            total_av = r2(total_dem + total_coh)
+
+            taux_ann = float(res_ms.get("taux_ris_annuel", 0.0))
+            immu = float(res_ms.get("immunisation_simple_annuelle", 0.0))
+            total_ap = r2(max(0.0, total_av - immu))
+            ri_ann = r2(max(0.0, taux_ann - total_ap) if taux_ann > 0 else 0.0)
+
+            res_ms["total_ressources_cohabitants_annuel"] = float(total_coh)
+            res_ms["total_ressources_avant_immunisation_simple_annuel"] = float(total_av)
+            res_ms["total_ressources_apres_immunisation_simple_annuel"] = float(total_ap)
+            res_ms["ris_theorique_annuel"] = float(ri_ann)
+            res_ms["ris_theorique_mensuel"] = float(r2(ri_ann / 12.0))
+
+            # segments cohérents
+            if seg_first and seg_first.get("segments"):
+                for s in seg_first["segments"]:
+                    res_seg = s.get("_detail_res")
+                    if not isinstance(res_seg, dict):
+                        continue
+
+                    res_seg["art34_mode"] = res_ms["art34_mode"]
+                    res_seg["art34_degree_utilise"] = res_ms["art34_degree_utilise"]
+                    res_seg["debug_deg1"] = res_ms.get("debug_deg1")
+                    res_seg["debug_deg2"] = res_ms.get("debug_deg2")
+                    res_seg["ris_injecte_mensuel"] = res_ms.get("ris_injecte_mensuel", 0.0)
+
+                    res_seg["cohabitants_part_a_compter_mensuel"] = res_ms["cohabitants_part_a_compter_mensuel"]
+                    res_seg["cohabitants_part_a_compter_annuel"] = res_ms["cohabitants_part_a_compter_annuel"]
+                    res_seg["total_ressources_cohabitants_annuel"] = res_ms["total_ressources_cohabitants_annuel"]
+
+                    total_dem_seg = float(res_seg.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
+                    total_av_seg = r2(total_dem_seg + float(res_seg["total_ressources_cohabitants_annuel"]))
+                    immu_seg = float(res_seg.get("immunisation_simple_annuelle", 0.0))
+                    total_ap_seg = r2(max(0.0, total_av_seg - immu_seg))
+                    taux_ann_seg = float(res_seg.get("taux_ris_annuel", 0.0))
+                    ri_ann_seg = r2(max(0.0, taux_ann_seg - total_ap_seg) if taux_ann_seg > 0 else 0.0)
+                    ri_m_seg = r2(ri_ann_seg / 12.0)
+
+                    res_seg["total_ressources_avant_immunisation_simple_annuel"] = float(total_av_seg)
+                    res_seg["total_ressources_apres_immunisation_simple_annuel"] = float(total_ap_seg)
+                    res_seg["ris_theorique_annuel"] = float(ri_ann_seg)
+                    res_seg["ris_theorique_mensuel"] = float(ri_m_seg)
+
+                    s["ris_mensuel"] = float(ri_m_seg)
+                    s["montant_segment"] = float(r2(float(ri_m_seg) * float(s.get("prorata", 0.0))))
+
+                seg_first["ris_1er_mois_total"] = float(r2(sum(float(s.get("montant_segment", 0.0)) for s in seg_first["segments"])))
+                seg_first["ris_mois_suivants"] = float(res_ms["ris_theorique_mensuel"])
+                seg_first["detail_mois_suivants"] = res_ms
+
+        # PDF
+        pdf_buf = make_decision_pdf_cpas(
+            dossier_label="Dossier",
+            answers_snapshot=answers,
+            res_mois_suivants=res_ms,
+            seg_first_month=seg_first,
+            logo_path="logo.png",
+            cfg_soc=cfg["socio_prof"],
+            cfg_ale=cfg["ale"],
+            cfg_cap=cfg["capital_mobilier"],
+            cfg_immo=cfg["immo"],
+            cfg_cession=cfg["cession"],
+        )
+
+        # Affichage
+        st.subheader("Résultat")
+        if demandeur_nom.strip():
+            st.caption(f"Demandeur : {demandeur_nom.strip()}")
+
+        st.write(f"**RI mois suivant (référence)** : {euro(res_ms.get('ris_theorique_mensuel',0))} € / mois")
+        if seg_first and seg_first.get("segments"):
+            st.write(f"**Total 1er mois** : {euro(seg_first.get('ris_1er_mois_total',0))} €")
+
+        if advanced_single:
+            st.caption(
+                f"Art.34 cascade — degré utilisé : {res_ms.get('art34_degree_utilise',0)} | "
+                f"pris en compte (mensuel) : {euro(res_ms.get('cohabitants_part_a_compter_mensuel',0))} €"
+            )
+
+        if pdf_buf is not None:
+            st.download_button(
+                "Télécharger PDF (décision)",
+                data=pdf_buf.getvalue(),
+                file_name="decision_dossier.pdf",
+                mime="application/pdf",
+                key="dl_pdf_single"
+            )
