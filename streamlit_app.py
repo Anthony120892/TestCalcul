@@ -2706,14 +2706,43 @@ else:
                 id1 = f"D{d['idx']+1}A"
                 name1 = (d.get("demandeur_nom") or "").strip() or f"Demandeur D{d['idx']+1}A"
                 rev1_ann = annual_from_revenus_list(d.get("revenus_demandeur_annuels", []), cfg["socio_prof"], cfg["ale"])
-                members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "_source": "demandeur",
-                                "tag_partenaire": False, "tag_deg1": False, "tag_deg2": False})
+                #members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "_source": "demandeur",
+                                #"tag_partenaire": False, "tag_deg1": False, "tag_deg2": False})
+                #if bool(d.get("couple_demandeur", False)):
+                    #id2 = f"D{d['idx']+1}B"
+                    #name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
+                    #rev2_ann = annual_from_revenus_list(d.get("revenus_conjoint_annuels", []), cfg["socio_prof"], cfg["ale"])
+                    #members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann), "exclure": False, "_source": "demandeur",
+                                    #"tag_partenaire": False, "tag_deg1": False, "tag_deg2": False})
+
+
+                #members.append({
+                members.append({
+                    "id": id1,
+                    "name": name1,
+                    "revenu_net_annuel": float(rev1_ann),
+                    "exclude": False,
+                    "_source": "demandeur",
+                    "role": "demandeur",
+                    "art34_candidate": True,   # ✅ permet de le proposer comme débiteur/candidat
+                    "tag_partenaire": False,
+                    "tag_deg1": False,
+                    "tag_deg2": False,
+                })
+
                 if bool(d.get("couple_demandeur", False)):
-                    id2 = f"D{d['idx']+1}B"
-                    name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
-                    rev2_ann = annual_from_revenus_list(d.get("revenus_conjoint_annuels", []), cfg["socio_prof"], cfg["ale"])
-                    members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann), "exclure": False, "_source": "demandeur",
-                                    "tag_partenaire": False, "tag_deg1": False, "tag_deg2": False})
+                    members.append({
+                        "id": id2,
+                        "name": name2,
+                        "revenu_net_annuel": float(rev2_ann),
+                        "exclude": False,
+                        "_source": "demandeur",
+                        "role": "demandeur",
+                        "art34_candidate": True,  # ✅ idem
+                        "tag_partenaire": False,
+                        "tag_deg1": False,
+                        "tag_deg2": False,
+                    })
 
         # Ajout cohabitants encodés
         members.extend(coh_members or [])
