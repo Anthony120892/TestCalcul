@@ -2140,17 +2140,6 @@ if multi_mode:
                 value=False,
                 key=f"hd_share_{i}"
             )
-        share_art34 = False
-        if advanced_household:
-            share_art34 = st.checkbox(
-                "Enfant/Jeune demandeur : partager le pool art.34 (si plusieurs dossiers avec mêmes débiteurs 1er degré)",
-                value=False,
-                key=f"hd_share_{i}"
-            )
-
-        # ✅ À LA FIN DU DOSSIER
-        with st.expander("Patrimoine & ressources PERSONNELS (ce dossier) — à encoder en fin de dossier", expanded=False):
-            pat_perso = ui_patrimoine_like_simple(prefix=f"hd_pat_perso_{i}")
 
         dossiers.append({
             "idx": i,
