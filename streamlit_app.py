@@ -1328,11 +1328,24 @@ def make_decision_pdf_cpas(
         story.append(bullets(lines))
 
     # --- Rendu détail capitaux / immo / cession (depuis un dict "res-like") ---
+    #def render_capitaux_detail_from(det: dict, annuel: float, title: str):
+        #det = det or {}
+        #details = det.get("tranches", []) or []
+        #if float(annuel) <= 0 and len(details) == 0 and float(det.get("total_capital", 0.0)) <= 0:
+            #return
     def render_capitaux_detail_from(det: dict, annuel: float, title: str):
         det = det or {}
-        details = det.get("tranches", []) or []
-        if float(annuel) <= 0 and len(details) == 0 and float(det.get("total_capital", 0.0)) <= 0:
-            return
+        tr = det.get("tranches", []) or []
+
+        total_cap = float(det.get("total_capital", 0.0) or 0.0)
+        annuel = float(annuel or 0.0)
+
+        # ✅ si tout est vide/0 => on n'affiche rien
+        if total_cap <= 0 and annuel <= 0:
+            # tranches parfois présentes même si tout = 0 -> on vérifie que tout est à zéro
+            if all(float(t.get("base", 0.0) or 0.0) <= 0 and float(t.get("produit", 0.0) or 0.0) <= 0 for t in tr):
+                return
+
 
     #def render_capitaux_detail_from(det: dict, annuel: float, title: str):
         #details = (res_seg or {}).get("details_capitaux") or []
