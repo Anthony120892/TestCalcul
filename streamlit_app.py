@@ -2319,6 +2319,12 @@ if multi_mode:
         ids_available = list(members_by_id.keys())
 
         st.divider()
+        # Sécurité : variables toujours définies, même si le bloc B n'a pas tourné
+        household = {"members": [], "members_by_id": {}}
+        ids_available = []
+        deg1_defaults = []
+        deg2_defaults = []
+
         st.subheader("D) Paramétrage art.34 par dossier (cascade + injections RI)")
         for d in dossiers:
             st.markdown(f"### {d['label']} — art.34")
