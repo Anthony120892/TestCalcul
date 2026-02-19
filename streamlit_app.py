@@ -1476,14 +1476,16 @@ def make_decision_pdf_cpas(
 
         
         pf_ann = float(res_seg.get("prestations_familiales_a_compter_annuel", 0.0))
+        #avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
+        avn_c_ann = float(res_seg.get("avantage_nature_logement_annuel_common", 0.0))
+        avn_p_ann = float(res_seg.get("avantage_nature_logement_annuel_perso", 0.0))
         avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
+        
         story.append(Spacer(1, 4))
         story.append(bullets([
             f"Prestations familiales : {euro(pf_ann)} € (annuel) [= {euro(float(res_seg.get('prestations_familiales_a_compter_mensuel',0)))} €/mois × 12]",
             #f"Avantage en nature logement (ménage) : {euro(avn_ann)} € (annuel) [= {euro(float(res_seg.get('avantage_nature_logement_mensuel',0)))} €/mois × 12]",
-        avn_c_ann = float(res_seg.get("avantage_nature_logement_annuel_common", 0.0))
-        avn_p_ann = float(res_seg.get("avantage_nature_logement_annuel_perso", 0.0))
-        avn_ann = float(res_seg.get("avantage_nature_logement_annuel", 0.0))
+        
             f"Avantage en nature logement : {euro(avn_ann)} € (annuel) "
             f"[commun {euro(avn_c_ann)} € + perso {euro(avn_p_ann)} €]",
 
