@@ -647,18 +647,18 @@ def art34_draw_from_pool_cascade(degree: int,
     }
 
 #ici
-    return {
-        "key": key,
-        "degree": int(degree),
-        "debtor_ids": ids,
-        "base_info": base_info,
-        "pool_initial_base_m": r2(base),
-        "pris_en_compte_m": float(take),
-        "reste_pool_m": float(pools[key]),
-        "partage_active": bool(key in share_plan and share_plan[key].get("count", 1) > 1),
-        "partage_count": int(share_plan.get(key, {}).get("count", 1)),
-        "partage_per_m": float(share_plan.get(key, {}).get("per", 0.0)),
-    }
+    #return {
+        #"key": key,
+        #"degree": int(degree),
+        #"debtor_ids": ids,
+        #"base_info": base_info,
+        #"pool_initial_base_m": r2(base),
+        #"pris_en_compte_m": float(take),
+        #"reste_pool_m": float(pools[key]),
+        #"partage_active": bool(key in share_plan and share_plan[key].get("count", 1) > 1),
+        #"partage_count": int(share_plan.get(key, {}).get("count", 1)),
+        #"partage_per_m": float(share_plan.get(key, {}).get("per", 0.0)),
+    #}
 
 def compute_art34_menage_avance_cascade(dossier: dict,
                                        household: dict,
@@ -2091,7 +2091,8 @@ def ui_cohabitants_cascade(prefix: str) -> list[dict]:
         is_partenaire = r1.checkbox("Partenaire", value=False, key=f"{prefix}_part_{i}")
         is_deg1 = r2.checkbox("Débiteur 1er degré", value=False, key=f"{prefix}_d1_{i}")
         is_deg2 = r3.checkbox("Débiteur 2e degré", value=False, key=f"{prefix}_d2_{i}")
-
+        is_art34 = c3.checkbox("Candidat art.34", value=True, key=f"{prefix}_a34_{i}")
+        
         m = {
             "id": str(mid).strip(),
             "name": str(name).strip(),
@@ -2100,6 +2101,7 @@ def ui_cohabitants_cascade(prefix: str) -> list[dict]:
             "tag_partenaire": bool(is_partenaire),
             "tag_deg1": bool(is_deg1),
             "tag_deg2": bool(is_deg2),
+            "art34_candidate": bool(is_art34),
             "_source": "cohabitant",
         }
         if m["id"]:
@@ -2268,7 +2270,7 @@ if multi_mode:
                 id1 = f"D{d['idx']+1}A"
                 name1 = (d.get("demandeur_nom") or "").strip() or f"Demandeur D{d['idx']+1}A"
                 rev1_ann = annual_from_revenus_list(d.get("revenus_demandeur_annuels", []), cfg["socio_prof"], cfg["ale"])
-                members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "_source": "demandeur"})
+                members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "art34_candidate": False, "_source": "demandeur"})
                 if bool(d.get("couple_demandeur", False)):
                     id2 = f"D{d['idx']+1}B"
                     name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
@@ -2277,6 +2279,7 @@ if multi_mode:
 
         nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=3, step=1, key="nb_autres_membres")
         for j in range(int(nb_autres)):
+            is_art34 = c3.checkbox("Candidat art.34", value=True, key=f"mem_art34_{j}")
             st.markdown(f"**Autre membre {j+1}**")
             c1, c2, c3 = st.columns([2, 1, 1])
             mid = c1.text_input("ID court (ex: X, Y, E)", value=f"M{j+1}", key=f"mem_id_{j}")
@@ -2305,13 +2308,10 @@ if multi_mode:
             c2.caption(f"➡️ Retenu : {rev_annuel:.2f} €/an")
 
             excl = c3.checkbox("Exclure (équité)", value=False, key=f"mem_excl_{j}")
-            m = {"id": str(mid).strip(), "name": str(name).strip(), "revenu_net_annuel": float(rev_annuel), "exclure": bool(excl), "_source": "autre"}
+            m = {"id": str(mid).strip(), "name": str(name).strip(), "revenu_net_annuel": float(rev_annuel), "exclure": bool(excl), "art34_candidate": bool(is_art34), "_source": "autre"}
+            
             if m["id"]:
                 members.append(m)
-
-        
-        
-        
         
         #members_by_id = {}
         #for m in members:
@@ -2375,7 +2375,9 @@ if multi_mode:
                 members_by_id[m["id"]] = m
 
         household = {"members": members, "members_by_id": members_by_id}
-        ids_available = list(members_by_id.keys())
+        #ids_available = list(members_by_id.keys())
+        ids_all = list(members_by_id.keys())
+        ids_art34 = [mid for mid in ids_all if bool(members_by_id[mid].get("art34_candidate", False))]
 
         # (optionnel) defaults si tu utilises des tags (sinon laisse vide)
         deg1_defaults = [mid for mid in ids_available if members_by_id[mid].get("tag_deg1")]
@@ -2390,7 +2392,7 @@ if multi_mode:
 
             d["art34_deg1_ids"] = c1.multiselect(
                 "Débiteurs 1er degré",
-                options=ids_available,
+                options=ids_art34,
                 format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=deg1_defaults,   # ou [] si tu ne veux pas de préselection
                 key=f"d_{d['idx']}_deg1"
@@ -2398,7 +2400,7 @@ if multi_mode:
 
             d["art34_deg2_ids"] = c2.multiselect(
                 "Débiteurs 2e degré (si 1er degré = 0)",
-                options=ids_available,
+                options=ids_art34,
                 format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=deg2_defaults,   # ou []
                 key=f"d_{d['idx']}_deg2"
