@@ -2380,8 +2380,10 @@ if multi_mode:
         ids_art34 = [mid for mid in ids_all if bool(members_by_id[mid].get("art34_candidate", False))]
 
         # (optionnel) defaults si tu utilises des tags (sinon laisse vide)
-        deg1_defaults = [mid for mid in ids_all if members_by_id[mid].get("tag_deg1")]
-        deg2_defaults = [mid for mid in ids_all if members_by_id[mid].get("tag_deg2")]
+        deg1_defaults = [mid for mid in ids_all if members_by_id.get(mid, {}).get("tag_deg1")]
+        deg2_defaults = [mid for mid in ids_all if members_by_id.get(mid, {}).get("tag_deg2")]
+        #deg1_defaults = [mid for mid in ids_all if members_by_id[mid].get("tag_deg1")]
+        #deg2_defaults = [mid for mid in ids_all if members_by_id[mid].get("tag_deg2")]
 
         st.divider()
         st.subheader("D) Paramétrage art.34 par dossier (cascade + injections RI)")
