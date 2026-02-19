@@ -507,10 +507,13 @@ def cohabitants_art34_part_mensuelle_cpas(cohabitants: list,
             detail_debiteurs.append({
                 "type": typ,
                 "name": nom,
-                "mensuel": r2(revenu_m),
-                "annuel": r2(revenu_ann),
+                "mensuel_brut": r2(revenu_m),
                 "taux_a_laisser_mensuel": r2(taux),
-                "excedent_mensuel_apres_deduction": r2(excedent_m),
+                "mensuel_pris_en_compte": r2(excedent_m),
+                "regle": "max(0, revenu - taux_cohab)",
+                "annuel": r2(revenu_ann),
+                "excedent_mensuel_apres_deduction": r2(excedent_m),  # compat PDF actuel
+                "mensuel": r2(revenu_m),  # compat PDF actuel
             })
 
     debiteurs_excedents_m_total = r2(debiteurs_excedents_m_total)
@@ -1348,14 +1351,24 @@ def make_decision_pdf_cpas(
         if part_m <= 0:
             lines.append("Pas de ressource cohabitant prise en compte pour la période.")
         else:
+            #if detail_part:
+                #for p in detail_part:
+                    #who = (p.get("name") or "").strip()
+                    #who = f"{who} (partenaire)" if who else "partenaire"
+                    #brut = float(p.get("mensuel_brut", 0.0))
+                    #pris = float(p.get("mensuel_pris_en_compte", p.get("mensuel", 0.0)))
+                    #regle = _safe(p.get("regle", ""))
+                    #lines.append(f"{who} : brut {euro(brut)} €/mois → pris en compte {euro(pris)} €/mois ({regle})")
             if detail_part:
                 for p in detail_part:
                     who = (p.get("name") or "").strip()
                     who = f"{who} (partenaire)" if who else "partenaire"
-                    brut = float(p.get("mensuel_brut", 0.0))
-                    pris = float(p.get("mensuel_pris_en_compte", p.get("mensuel", 0.0)))
-                    regle = _safe(p.get("regle", ""))
-                    lines.append(f"{who} : brut {euro(brut)} €/mois → pris en compte {euro(pris)} €/mois ({regle})")
+
+                    brut = float(p.get("mensuel_brut", p.get("mensuel", 0.0)))
+                    pris = float(p.get("mensuel_pris_en_compte", 0.0))
+                    regle = (p.get("regle") or "").strip()
+
+                    lines.append(f"{who} : {euro(brut)} €/mois → pris en compte {euro(pris)} €/mois ({regle})")
 
             if detail_deb:
                 lines.append(f"Débiteurs (déduction {euro(taux)} €/mois appliquée individuellement) :")
