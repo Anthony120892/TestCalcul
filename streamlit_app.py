@@ -585,6 +585,8 @@ def art34_group_excess_m_cascade(debtors: list, taux: float, injected_income_m: 
         "detail_debiteurs": per_deb,
     }
 
+#ici 
+
 def art34_draw_from_pool_cascade(degree: int,
                                  debtor_ids: list,
                                  household: dict,
@@ -600,30 +602,51 @@ def art34_draw_from_pool_cascade(degree: int,
 
     key = make_pool_key(ids)
 
+    # ✅ Base recalculée à chaque appel (avec injection éventuelle)
     base_info = art34_group_excess_m_cascade(debtors, taux, injected_income_m=injected_income_m)
     base = float(base_info["base_exces_m"])
 
-    # init pool
+    # ✅ pools[key] = "déjà pris" (taken so far), pas "reste"
     if key not in pools:
-        pools[key] = float(base)
+        pools[key] = 0.0
 
-    # init partage (si demandé)
+    deja_pris = float(pools[key])
+    disponible = max(0.0, base - deja_pris)
+
+    # init partage (si demandé) : plafond figé au 1er passage
     if key in share_plan and share_plan[key].get("count", 1) > 1:
-        # per = base initial / count (figé au 1er passage)
         if float(share_plan[key].get("per", 0.0)) <= 0.0:
             share_plan[key]["per"] = r2(base / float(share_plan[key]["count"]))
         per = float(share_plan[key]["per"])
-        take = min(float(pools[key]), per)
+        take = min(disponible, per)
     else:
-        take = float(pools[key])
-    
-    # ✅ cap optionnel (ne pas prendre plus que le besoin restant)
+        take = disponible
+
+    # ✅ cap optionnel : ne pas prendre plus que le besoin restant
     if cap_take_m is not None:
         take = min(float(take), max(0.0, float(cap_take_m)))
 
     take = r2(max(0.0, take))
-    pools[key] = r2(max(0.0, float(pools[key]) - take))
 
+    # ✅ on augmente "déjà pris"
+    pools[key] = r2(deja_pris + take)
+
+    reste = r2(max(0.0, base - float(pools[key])))
+
+    return {
+        "key": key,
+        "degree": int(degree),
+        "debtor_ids": ids,
+        "base_info": base_info,
+        "pool_initial_base_m": r2(base),
+        "pris_en_compte_m": float(take),
+        "reste_pool_m": float(reste),
+        "partage_active": bool(key in share_plan and share_plan[key].get("count", 1) > 1),
+        "partage_count": int(share_plan.get(key, {}).get("count", 1)),
+        "partage_per_m": float(share_plan.get(key, {}).get("per", 0.0)),
+    }
+
+#ici
     return {
         "key": key,
         "degree": int(degree),
@@ -712,6 +735,7 @@ def compute_art34_menage_avance_cascade(dossier: dict,
 
     return {
         "art34_mode": "MENAGE_AVANCE_CASCADE",
+        "taux_a_laisser_mensuel": r2(taux),
         "art34_degree_utilise": int(used_degree),
         "cohabitants_part_a_compter_mensuel": float(part_m),
         "cohabitants_part_a_compter_annuel": float(r2(part_m * 12.0)),
@@ -2319,6 +2343,8 @@ if multi_mode:
                 res_ms["debug_deg1"] = art34_adv.get("debug_deg1")
                 res_ms["debug_deg2"] = art34_adv.get("debug_deg2")
                 res_ms["ris_injecte_mensuel"] = art34_adv.get("ris_injecte_mensuel", 0.0)
+                res_seg["taux_a_laisser_mensuel"] = res_ms.get("taux_a_laisser_mensuel", taux_art34)
+
 
                 # recalcul totaux + RI
                 total_dem = float(res_ms.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
@@ -2599,6 +2625,8 @@ else:
             res_ms["debug_deg1"] = art34_adv.get("debug_deg1")
             res_ms["debug_deg2"] = art34_adv.get("debug_deg2")
             res_ms["ris_injecte_mensuel"] = art34_adv.get("ris_injecte_mensuel", 0.0)
+            res_ms["taux_a_laisser_mensuel"] = art34_adv.get("taux_a_laisser_mensuel", taux_art34)
+
 
             # recalcul totaux + RI
             total_dem = float(res_ms.get("total_ressources_demandeur_avant_immunisation_annuel", 0.0))
