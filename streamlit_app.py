@@ -2078,10 +2078,14 @@ multi_mode = st.checkbox("Plusieurs demandes RIS — comparer / calculer un mén
 # ------------------------------------------------------------
 if multi_mode:
     st.subheader("Choix du mode multi")
-    advanced_household = st.checkbox(
-        "Ménage avancé (cascade art.34 : priorité 1er degré -> 2e degré + pool)",
-        value=True
-    )
+    advanced_household = True
+    st.info("Mode multi : ménage avancé activé (cascade art.34).")
+
+    #st.subheader("Choix du mode multi")
+    #advanced_household = st.checkbox(
+        #"Ménage avancé (cascade art.34 : priorité 1er degré -> 2e degré + pool)",
+        #value=True
+    #)
 
     nb_dem = st.number_input(
         "Nombre de dossiers/demandes à calculer",
@@ -2168,18 +2172,19 @@ if multi_mode:
             show_simple_art34=not advanced_household
         )
 
-    with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
-        pat_common_ui = ui_patrimoine_like_simple(prefix="hd_menage_pat_common")
+    #with st.expander("Patrimoine & ressources du ménage (communes)", expanded=False):
+        #pat_common_ui = ui_patrimoine_like_simple(prefix="hd_menage_pat_common")
 
     # ✅ on fusionne dans un seul dict “ménage commun”
-    menage_common = (menage_common or {})
-    menage_common.update(pat_common_ui or {})
+    #menage_common = (menage_common or {})
+    #menage_common.update(pat_common_ui or {})
 
     # PF-links -> dossiers
-    for link in menage_common.get("pf_links", []):
-        idx = int(link["dem_index"])
-        if 0 <= idx < len(dossiers):
-            dossiers[idx]["prestations_familiales_a_compter_mensuel"] += float(link["pf_mensuel"])
+    #for link in menage_common.get("pf_links", []):
+        #idx = int(link["dem_index"])
+        #if 0 <= idx < len(dossiers):
+            #dossiers[idx]["prestations_familiales_a_compter_mensuel"] += float(link["pf_mensuel"])
+    menage_common = {}
 
     # Ménage avancé : membres & débiteurs
     household = {"members": [], "members_by_id": {}}
@@ -2298,10 +2303,13 @@ if multi_mode:
 
         for d in dossiers:
             # answers = ménage commun + dossier
-            answers = {}
-            answers.update(menage_common or {})
+            #answers = {}
+            #answers.update(menage_common or {})
             # ✅ Patrimoine commun vs perso
-            answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
+            #answers["_patrimoine_common"] = _extract_patrimoine(menage_common or {})
+            #answers["_patrimoine_perso"]  = _extract_patrimoine(d.get("patrimoine_perso") or {})
+            answers = {}
+            answers["_patrimoine_common"] = _extract_patrimoine({})  # plus de commun
             answers["_patrimoine_perso"]  = _extract_patrimoine(d.get("patrimoine_perso") or {})
 
             answers.update({
