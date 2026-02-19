@@ -2309,41 +2309,40 @@ if multi_mode:
             if m["id"]:
                 members.append(m)
 
-        members_by_id = {}
-        for m in members:
-            if m.get("exclure", False):
-                continue
-            if m.get("id"):
-                members_by_id[m["id"]] = m
-        household = {"members": members, "members_by_id": members_by_id}
-        ids_available = list(members_by_id.keys())
+        
+        
+        
+        
+        #members_by_id = {}
+        #for m in members:
+            #if m.get("exclure", False):
+                #continue
+            #if m.get("id"):
+                #members_by_id[m["id"]] = m
+        #household = {"members": members, "members_by_id": members_by_id}
+        #ids_available = list(members_by_id.keys())
 
-        st.divider()
-        # Sécurité : variables toujours définies, même si le bloc B n'a pas tourné
-        household = {"members": [], "members_by_id": {}}
-        ids_available = []
-        deg1_defaults = []
-        deg2_defaults = []
+        #st.divider()
 
-        st.subheader("D) Paramétrage art.34 par dossier (cascade + injections RI)")
-        for d in dossiers:
-            st.markdown(f"### {d['label']} — art.34")
-            c1, c2 = st.columns(2)
-            d["art34_deg1_ids"] = c1.multiselect(
-                "Débiteurs 1er degré",
-                options=ids_available,
-                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
-                default=deg1_defaults,
-                key=f"d_{d['idx']}_deg1"
-            )
+        #st.subheader("D) Paramétrage art.34 par dossier (cascade + injections RI)")
+        #for d in dossiers:
+            #st.markdown(f"### {d['label']} — art.34")
+            #c1, c2 = st.columns(2)
+            #d["art34_deg1_ids"] = c1.multiselect(
+                #"Débiteurs 1er degré",
+                #options=ids_available,
+                #format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                #default=deg1_defaults,
+                #key=f"d_{d['idx']}_deg1"
+            #)
 
-            d["art34_deg2_ids"] = c2.multiselect(
-                "Débiteurs 2e degré (si 1er degré = 0)",
-                options=ids_available,
-                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
-                default=deg2_defaults,
-                key=f"d_{d['idx']}_deg2"
-            )
+            #d["art34_deg2_ids"] = c2.multiselect(
+                #"Débiteurs 2e degré (si 1er degré = 0)",
+                #options=ids_available,
+                #format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                #default=deg2_defaults,
+                #key=f"d_{d['idx']}_deg2"
+            #)
             
             #d["art34_deg1_ids"] = c1.multiselect(
                 #"Débiteurs 1er degré (cohabitants débiteurs d'aliments)",
@@ -2359,6 +2358,52 @@ if multi_mode:
                 #default=[],
                 #key=f"d_{d['idx']}_deg2"
             #)
+            #d["include_ris_from_dossiers"] = st.multiselect(
+                #"Injection : ajouter le RI mensuel d’autres dossiers au groupe 1er degré (avant N×taux)",
+                #options=[k for k in range(len(dossiers))],
+                #format_func=lambda k: f"{k+1} — {dossiers[k]['label']}",
+                #default=[],
+                #key=f"d_{d['idx']}_risinj"
+            #)
+
+        # ... fin de construction members / members_by_id
+        members_by_id = {}
+        for m in members:
+            if m.get("exclure", False):
+                continue
+            if m.get("id"):
+                members_by_id[m["id"]] = m
+
+        household = {"members": members, "members_by_id": members_by_id}
+        ids_available = list(members_by_id.keys())
+
+        # (optionnel) defaults si tu utilises des tags (sinon laisse vide)
+        deg1_defaults = [mid for mid in ids_available if members_by_id[mid].get("tag_deg1")]
+        deg2_defaults = [mid for mid in ids_available if members_by_id[mid].get("tag_deg2")]
+
+        st.divider()
+        st.subheader("D) Paramétrage art.34 par dossier (cascade + injections RI)")
+
+        for d in dossiers:
+            st.markdown(f"### {d['label']} — art.34")
+            c1, c2 = st.columns(2)
+
+            d["art34_deg1_ids"] = c1.multiselect(
+                "Débiteurs 1er degré",
+                options=ids_available,
+                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                default=deg1_defaults,   # ou [] si tu ne veux pas de préselection
+                key=f"d_{d['idx']}_deg1"
+            )
+
+            d["art34_deg2_ids"] = c2.multiselect(
+                "Débiteurs 2e degré (si 1er degré = 0)",
+                options=ids_available,
+                format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
+                default=deg2_defaults,   # ou []
+                key=f"d_{d['idx']}_deg2"
+            )
+
             d["include_ris_from_dossiers"] = st.multiselect(
                 "Injection : ajouter le RI mensuel d’autres dossiers au groupe 1er degré (avant N×taux)",
                 options=[k for k in range(len(dossiers))],
