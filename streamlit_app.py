@@ -843,6 +843,36 @@ def compute_officiel_cpas_annuel(answers: dict, engine: dict, as_of=None) -> dic
     avantage_perso_ann  = r2(avantage_perso_m * 12.0)
     avantage_nature_ann = r2(avantage_nature_m * 12.0)
 #jusqu'ici 
+# --- Prestations familiales (PF) ---
+    pf_m = r2(max(0.0, float(
+        answers.get("prestations_familiales_a_compter_mensuel",
+                    answers.get("pf_a_compter_mensuel", 0.0))
+    )))
+    pf_ann = r2(pf_m * 12.0)
+
+    # --- Art.34 (mode simple) ---
+    art34 = cohabitants_art34_part_mensuelle_cpas(
+        cohabitants=answers.get("cohabitants_art34", []),
+        taux_a_laisser_mensuel=float(cfg["art34"].get("taux_a_laisser_mensuel", 0.0)),
+        partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
+        nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
+        as_of=as_of
+    )
+
+        # --- Prestations familiales (PF) ---
+    #pf_m = r2(max(0.0, float(answers.get("prestations_familiales_a_compter_mensuel", 0.0))))
+    #pf_ann = r2(pf_m * 12.0)
+
+    # --- Art.34 (mode simple) ---
+    # (En ménage avancé, tu mets answers["cohabitants_art34"] = [] donc ça fera 0 — parfait)
+    #art34 = cohabitants_art34_part_mensuelle_cpas(
+        #cohabitants=answers.get("cohabitants_art34", []),
+        #taux_a_laisser_mensuel=float(cfg["art34"]["taux_a_laisser_mensuel"]),
+        #partage_active=bool(answers.get("partage_enfants_jeunes_actif", False)),
+        #nb_demandeurs_a_partager=int(answers.get("nb_enfants_jeunes_demandeurs", 1)),
+        #as_of=as_of
+    #)
+
 
     total_demandeur_avant_annuel = r2(
         revenus_demandeur_annuels
