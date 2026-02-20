@@ -2392,9 +2392,15 @@ if multi_mode:
             st.markdown(f"### {d['label']} — art.34")
             c1, c2 = st.columns(2)
 
+            members_by_id = household.get("members_by_id", {})  # normalement déjà présent
+            ids_all = list(members_by_id.keys())
+
+             # Pool complet (demandeurs + autres), en excluant seulement ceux "exclude"
+            ids_available = [mid for mid in ids_all if not bool(members_by_id.get(mid, {}).get("exclude", False))]
+            
             d["art34_deg1_ids"] = c1.multiselect(
                 "Débiteurs 1er degré",
-                options=ids_art34,
+                options=ids_available,
                 format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=deg1_defaults,   # ou [] si tu ne veux pas de préselection
                 key=f"d_{d['idx']}_deg1"
@@ -2402,7 +2408,7 @@ if multi_mode:
 
             d["art34_deg2_ids"] = c2.multiselect(
                 "Débiteurs 2e degré (si 1er degré = 0)",
-                options=ids_art34,
+                options=ids_available,
                 format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=deg2_defaults,   # ou []
                 key=f"d_{d['idx']}_deg2"
