@@ -2270,12 +2270,12 @@ if multi_mode:
                 id1 = f"D{d['idx']+1}A"
                 name1 = (d.get("demandeur_nom") or "").strip() or f"Demandeur D{d['idx']+1}A"
                 rev1_ann = annual_from_revenus_list(d.get("revenus_demandeur_annuels", []), cfg["socio_prof"], cfg["ale"])
-                members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "art34_candidate": False, "_source": "demandeur"})
+                members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann), "exclure": False, "art34_candidate": True, "_source": "demandeur"})
                 if bool(d.get("couple_demandeur", False)):
                     id2 = f"D{d['idx']+1}B"
                     name2 = (d.get("demandeur2_nom") or "").strip() or f"Demandeur D{d['idx']+1}B"
                     rev2_ann = annual_from_revenus_list(d.get("revenus_conjoint_annuels", []), cfg["socio_prof"], cfg["ale"])
-                    members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann), "exclure": False, "_source": "demandeur"})
+                    members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann), "exclure": False, "art34_candidate": True, "_source": "demandeur"})
 
         nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=3, step=1, key="nb_autres_membres")
         for j in range(int(nb_autres)):
@@ -2396,7 +2396,7 @@ if multi_mode:
             ids_all = list(members_by_id.keys())
 
              # Pool complet (demandeurs + autres), en excluant seulement ceux "exclude"
-            ids_available = [mid for mid in ids_all if not bool(members_by_id.get(mid, {}).get("exclude", False))]
+            ids_available = [mid for mid in ids_all if not bool(members_by_id.get(mid, {}).get("exclure", False))]
             ids_art34 = [mid for mid in ids_available if bool(members_by_id.get(mid, {}).get("art34_candidate", False))]
             
             d["art34_deg1_ids"] = c1.multiselect(
