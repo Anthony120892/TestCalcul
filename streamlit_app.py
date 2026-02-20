@@ -2397,10 +2397,11 @@ if multi_mode:
 
              # Pool complet (demandeurs + autres), en excluant seulement ceux "exclude"
             ids_available = [mid for mid in ids_all if not bool(members_by_id.get(mid, {}).get("exclude", False))]
+            ids_art34 = [mid for mid in ids_available if bool(members_by_id.get(mid, {}).get("art34_candidate", False))]
             
             d["art34_deg1_ids"] = c1.multiselect(
                 "Débiteurs 1er degré",
-                options=ids_available,
+                options=ids_art34,
                 format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=deg1_defaults,   # ou [] si tu ne veux pas de préselection
                 key=f"d_{d['idx']}_deg1"
@@ -2408,12 +2409,18 @@ if multi_mode:
 
             d["art34_deg2_ids"] = c2.multiselect(
                 "Débiteurs 2e degré (si 1er degré = 0)",
-                options=ids_available,
+                options=ids_art34,
                 format_func=lambda mid: f"{mid} — {household['members_by_id'].get(mid, {}).get('name','')}".strip(" —"),
                 default=deg2_defaults,   # ou []
                 key=f"d_{d['idx']}_deg2"
             )
+            
+            # ✅ nettoyage si un membre a été sélectionné puis décoché "candidat art.34"
+            d["art34_deg1_ids"] = [mid for mid in d.get("art34_deg1_ids", []) if mid in ids_art34]
+            d["art34_deg2_ids"] = [mid for mid in d.get("art34_deg2_ids", []) if mid in ids_art34]
 
+
+            
             d["include_ris_from_dossiers"] = st.multiselect(
                 "Injection : ajouter le RI mensuel d’autres dossiers au groupe 1er degré (avant N×taux)",
                 options=[k for k in range(len(dossiers))],
