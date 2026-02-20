@@ -2687,13 +2687,13 @@ else:
             id1 = "A"
             name1 = demandeur_nom.strip() or "Demandeur A"
             rev1_ann_calc = annual_from_revenus_list(rev1, cfg["socio_prof"], cfg["ale"])
-            #members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann_calc), "exclure": False, "_source": "demandeur"})
+            members.append({"id": id1, "name": name1, "revenu_net_annuel": float(rev1_ann_calc), "exclure": False, "_source": "demandeur", "art34_candidate": True})
             # Conjoint B (si couple)
             if is_couple:
                 id2 = "B"
                 name2 = demandeur2_nom.strip() or "Demandeur B"
                 rev2_ann_calc = annual_from_revenus_list(rev2, cfg["socio_prof"], cfg["ale"])
-                #members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann_calc), "exclure": False, "_source": "demandeur"})
+                members.append({"id": id2, "name": name2, "revenu_net_annuel": float(rev2_ann_calc), "exclure": False, "_source": "demandeur", "art34_candidate": True})
 
         #nb_autres = st.number_input("Nombre d’AUTRES membres à encoder (hors demandeurs)", min_value=0, value=2, step=1, key="s_nb_autres")
         #for j in range(int(nb_autres)):
