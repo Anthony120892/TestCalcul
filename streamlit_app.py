@@ -3,6 +3,9 @@ import os
 import calendar
 from datetime import date, timedelta
 from io import BytesIO
+import sqlite3
+import uuid
+from datetime import datetime
 
 import streamlit as st
 
@@ -124,7 +127,127 @@ def safe_parse_date(x):
         except Exception:
             return None
     return None
+# ============================================================
+# ✅ PERSISTENCE (SQLite) : sauvegarde/chargement de calculs
+# ============================================================
+DB_PATH = "ris_history.db"
 
+def _json_default(o):
+    # JSON-friendly : date/datetime -> isoformat
+    if isinstance(o, (date, datetime)):
+        return o.isoformat()
+    return str(o)
+
+def _maybe_date(v):
+    if isinstance(v, str) and len(v) == 10:
+        try:
+            return date.fromisoformat(v)
+        except Exception:
+            return v
+    return v
+
+def db_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def db_init():
+    with db_conn() as con:
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS ris_calcs (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            engine_version TEXT,
+            engine_config_json TEXT,
+            ui_state_json TEXT NOT NULL,
+            result_json TEXT
+        )
+        """)
+        con.commit()
+
+def db_upsert_calc(calc_id: str, title: str, engine: dict, ui_state: dict, result_payload: dict | None):
+    now = datetime.now().isoformat(timespec="seconds")
+    eng_ver = str((engine or {}).get("version", ""))
+    eng_cfg = json.dumps((engine or {}).get("config", {}), ensure_ascii=False, default=_json_default)
+    ui_json = json.dumps(ui_state or {}, ensure_ascii=False, default=_json_default)
+    res_json = json.dumps(result_payload or {}, ensure_ascii=False, default=_json_default) if result_payload else None
+
+    with db_conn() as con:
+        con.execute("""
+        INSERT INTO ris_calcs (id, title, created_at, updated_at, engine_version, engine_config_json, ui_state_json, result_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title=excluded.title,
+            updated_at=excluded.updated_at,
+            engine_version=excluded.engine_version,
+            engine_config_json=excluded.engine_config_json,
+            ui_state_json=excluded.ui_state_json,
+            result_json=excluded.result_json
+        """, (calc_id, title, now, now, eng_ver, eng_cfg, ui_json, res_json))
+        con.commit()
+
+def db_list_calcs(limit: int = 200):
+    with db_conn() as con:
+        cur = con.execute("""
+            SELECT id, title, updated_at, engine_version
+            FROM ris_calcs
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (int(limit),))
+        return cur.fetchall()
+
+def db_get_calc(calc_id: str):
+    with db_conn() as con:
+        cur = con.execute("""
+            SELECT id, title, created_at, updated_at, engine_version, engine_config_json, ui_state_json, result_json
+            FROM ris_calcs
+            WHERE id=?
+        """, (calc_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "title": row[1],
+            "created_at": row[2],
+            "updated_at": row[3],
+            "engine_version": row[4],
+            "engine_config": json.loads(row[5] or "{}"),
+            "ui_state": json.loads(row[6] or "{}"),
+            "result": json.loads(row[7] or "{}") if row[7] else None,
+        }
+
+def db_delete_calc(calc_id: str):
+    with db_conn() as con:
+        con.execute("DELETE FROM ris_calcs WHERE id=?", (calc_id,))
+        con.commit()
+
+def snapshot_ui_state():
+    """
+    ✅ Sauvegarde “intelligente” : on capture uniquement les clés Streamlit utiles.
+    Ajuste les prefixes si tu ajoutes d'autres blocs.
+    """
+    prefixes = (
+        "s_", "hd_", "mem_", "d_", "prefill_", "nb_", "mode_", "dl_",
+        "prefill_dem", "nb_autres", "hd_menage", "hd_coh",
+    )
+    ui = {}
+    for k, v in st.session_state.items():
+        if k.startswith(prefixes):
+            ui[k] = v
+    return ui
+
+def apply_ui_state(ui_state: dict):
+    """
+    ⚠️ À appeler AVANT de construire les widgets.
+    """
+    for k, v in (ui_state or {}).items():
+        # streamlit date_input préfère date
+        if isinstance(v, str):
+            v2 = _maybe_date(v)
+        else:
+            v2 = v
+        st.session_state[k] = v2
 # ============================================================
 # CAPITAUX MOBILIERS (annuel) - détail tranches
 # ============================================================
@@ -1701,7 +1824,21 @@ def make_decision_pdf_cpas(
 # UI STREAMLIT
 # ============================================================
 st.set_page_config(page_title="Calcul RIS", layout="centered")
+db_init()
 
+# ✅ si on vient de cliquer “Ouvrir” dans l’historique
+if "pending_load_calc_id" in st.session_state and st.session_state["pending_load_calc_id"]:
+    rec = db_get_calc(st.session_state["pending_load_calc_id"])
+    if rec:
+        apply_ui_state(rec["ui_state"])
+        # (optionnel) tu peux aussi restaurer les paramètres engine/config si tu veux:
+        # cfg.update(rec["engine_config"])
+        st.session_state["loaded_calc_id"] = rec["id"]
+        st.session_state["loaded_calc_title"] = rec["title"]
+    st.session_state["pending_load_calc_id"] = None
+    st.rerun()
+
+tab_calc, tab_hist = st.tabs(["🧮 Calcul", "📚 Historique"])
 if os.path.exists("logo.png"):
     st.image("logo.png", use_container_width=False)
 
@@ -1766,6 +1903,50 @@ with st.sidebar:
     cfg["socio_prof"]["max_mensuel"] = st.number_input("Exo socio-pro max (€/mois)", min_value=0.0, value=float(cfg["socio_prof"]["max_mensuel"]), format="%.2f")
     cfg["socio_prof"]["artistique_annuel"] = st.number_input("Exo artistique irrégulier (€/an)", min_value=0.0, value=float(cfg["socio_prof"]["artistique_annuel"]), format="%.2f")
 
+    tab_calc
+    loaded_id = st.session_state.get("loaded_calc_id")  # si on a chargé un dossier
+    default_title = st.session_state.get("loaded_calc_title", "") or "Nouveau calcul"
+
+    c1, c2 = st.columns([2, 1])
+    save_title = c1.text_input("Nom du calcul à sauvegarder", value=default_title, key="save_title")
+
+    if c2.button("💾 Sauvegarder / Mettre à jour"):
+        calc_id = loaded_id or str(uuid.uuid4())
+        ui_state = snapshot_ui_state()
+        result_payload = st.session_state.get("last_result_payload")
+        db_upsert_calc(calc_id, save_title.strip() or "Sans titre", engine, ui_state, result_payload)
+        st.session_state["loaded_calc_id"] = calc_id
+        st.session_state["loaded_calc_title"] = save_title.strip() or "Sans titre"
+        st.success("Sauvegardé ✅ (tu peux le rouvrir dans l’historique)")
+
+    with tab_hist:
+        st.subheader("📚 Calculs sauvegardés")
+
+        rows = db_list_calcs(limit=200)
+        if not rows:
+            st.info("Aucun calcul sauvegardé pour l’instant.")
+        else:
+        # choix
+            options = {f"{title} — maj {updated_at} (v{ver})": cid for (cid, title, updated_at, ver) in rows}
+            pick = st.selectbox("Choisir un calcul", list(options.keys()))
+            calc_id = options[pick]
+
+            c1, c2, c3 = st.columns(3)
+            if c1.button("📂 Ouvrir dans l’éditeur"):
+                st.session_state["pending_load_calc_id"] = calc_id
+                st.rerun()
+
+            rec = db_get_calc(calc_id)
+            if c2.button("🗑️ Supprimer"):
+                db_delete_calc(calc_id)
+                st.success("Supprimé.")
+                st.rerun()
+
+            if rec and c3.button("👀 Voir le JSON (debug)"):
+                st.json({
+                    "meta": {k: rec[k] for k in ("id","title","created_at","updated_at","engine_version")},
+                    "result": rec.get("result")
+                })
 # ---------------------------
 # UI Helpers
 # ---------------------------
@@ -2432,6 +2613,11 @@ if multi_mode:
     # CALCUL MULTI
     st.divider()
     if st.button("Calculer (multi)"):
+        st.session_state["last_result_payload"] = {
+            "mode": "multi" if multi_mode else "single",
+            "advanced_household": bool(advanced_household) if multi_mode else bool(advanced_single),
+            "results": results if multi_mode else {"res_ms": res_ms, "seg_first": seg_first},
+        }
         taux_art34 = float(cfg["art34"]["taux_a_laisser_mensuel"])
 
         # partage : par groupe d'IDs (deg1), si plusieurs dossiers "share_art34"
@@ -2810,6 +2996,7 @@ else:
         pat_perso_single = ui_patrimoine_like_simple(prefix="s_pat_perso")
 
     if st.button("Calculer (single)"):
+        
         # answers = ménage commun + dossier
         answers = {}
         answers.update(menage_common or {})
@@ -2956,3 +3143,8 @@ else:
                 mime="application/pdf",
                 key="dl_pdf_single"
             )
+            st.session_state["last_result_payload"] = {
+                "mode": "multi" if multi_mode else "single",
+                "advanced_household": bool(advanced_household) if multi_mode else bool(advanced_single),
+                "results": results if multi_mode else {"res_ms": res_ms, "seg_first": seg_first},
+            }
