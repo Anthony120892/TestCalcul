@@ -130,6 +130,215 @@ def safe_parse_date(x):
     return None
 
 # ============================================================
+# ARCHIVES / RÉVISION / INDU-DÛ + PDF COMPARATIF
+# ============================================================
+import re
+from datetime import datetime
+
+SAVE_DIR = "saved_cases"
+
+def _ensure_save_dir():
+    os.makedirs(SAVE_DIR, exist_ok=True)
+
+def _now_iso():
+    return datetime.now().isoformat(timespec="seconds")
+
+def _safe_filename(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"[^a-zA-Z0-9_\-\.]+", "_", s)
+    return s[:80] if s else "sans_nom"
+
+def _json_default(o):
+    if isinstance(o, (date, datetime)):
+        return o.isoformat()
+    return str(o)
+
+def _case_path(case_id: str) -> str:
+    _ensure_save_dir()
+    return os.path.join(SAVE_DIR, f"{_safe_filename(case_id)}.json")
+
+def list_saved_cases() -> list[dict]:
+    _ensure_save_dir()
+    out = []
+    for fn in sorted(os.listdir(SAVE_DIR)):
+        if not fn.lower().endswith(".json"):
+            continue
+        fp = os.path.join(SAVE_DIR, fn)
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            out.append({
+                "case_id": data.get("case_id") or fn[:-5],
+                "name": data.get("name") or fn[:-5],
+                "created_at": data.get("created_at"),
+                "revisions_count": len(data.get("revisions") or []),
+                "_path": fp
+            })
+        except Exception:
+            continue
+    return out
+
+def load_case(case_id: str) -> dict | None:
+    fp = _case_path(case_id)
+    if not os.path.exists(fp):
+        return None
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def save_new_case(case_id: str, name: str, payload: dict) -> tuple[bool, str]:
+    """
+    payload doit contenir au minimum :
+      - initial: {answers, res_ms, seg_first, meta}
+    """
+    _ensure_save_dir()
+    fp = _case_path(case_id)
+    if os.path.exists(fp):
+        return False, "Ce case_id existe déjà."
+    data = {
+        "case_id": case_id,
+        "name": name,
+        "created_at": _now_iso(),
+        "initial": payload.get("initial") or {},
+        "revisions": [],
+    }
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=_json_default)
+        return True, "Sauvegarde créée."
+    except Exception as e:
+        return False, f"Erreur écriture : {e}"
+
+def append_revision(case_id: str, revision_payload: dict) -> tuple[bool, str]:
+    """
+    revision_payload :
+      - revised: {answers, res_ms, seg_first, meta}
+      - diff: {delta_total, delta_by_period, ...}
+    """
+    data = load_case(case_id)
+    if not data:
+        return False, "Dossier introuvable."
+    data.setdefault("revisions", [])
+    revision_payload = revision_payload or {}
+    revision_payload.setdefault("revised_at", _now_iso())
+    data["revisions"].append(revision_payload)
+    try:
+        with open(_case_path(case_id), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=_json_default)
+        return True, "Révision ajoutée."
+    except Exception as e:
+        return False, f"Erreur écriture : {e}"
+
+# ----------------------------
+# Calcul RI sur une période : total + détails prorata par mois
+# ----------------------------
+def _month_start(d: date) -> date:
+    return date(d.year, d.month, 1)
+
+def _month_end(d: date) -> date:
+    return end_of_month(d)
+
+def compute_ri_amount_between(answers: dict, engine: dict, d_from: date, d_to: date) -> dict:
+    """
+    Calcule le RI dû sur [d_from ; d_to] inclus.
+    Approche robuste : on coupe par mois, et on calcule le RI mensuel à la date de début du segment (as_of),
+    puis prorata jours/days_in_month.
+    """
+    if not isinstance(d_from, date) or not isinstance(d_to, date):
+        return {"total": 0.0, "periods": []}
+    if d_to < d_from:
+        return {"total": 0.0, "periods": []}
+
+    periods = []
+    total = 0.0
+    cur = d_from
+
+    while cur <= d_to:
+        ms = _month_start(cur)
+        me = _month_end(cur)
+        seg_end = min(me, d_to)
+
+        days_in_month = calendar.monthrange(cur.year, cur.month)[1]
+        days = (seg_end - cur).days + 1
+        prorata = days / days_in_month
+
+        res = compute_officiel_cpas_annuel(answers, engine, as_of=cur)
+        ri_m = float(res.get("ris_theorique_mensuel", 0.0))
+        amount = r2(ri_m * prorata)
+
+        periods.append({
+            "month": f"{cur.year}-{cur.month:02d}",
+            "du": str(cur),
+            "au": str(seg_end),
+            "jours": int(days),
+            "jours_mois": int(days_in_month),
+            "prorata": float(prorata),
+            "ri_mensuel": r2(ri_m),
+            "montant": float(amount),
+        })
+        total = r2(total + amount)
+        cur = seg_end + timedelta(days=1)
+
+    return {"total": float(total), "periods": periods}
+
+def compute_indu_ou_du(initial_answers: dict, revised_answers: dict, engine: dict, d_from: date, d_rev: date) -> dict:
+    """
+    Compare total RI initial vs révisé sur [d_from ; d_rev] inclus.
+    delta = total_revise - total_initial
+      delta > 0 => DÛ (CPAS doit payer en +)
+      delta < 0 => INDU (à récupérer)
+    """
+    ini = compute_ri_amount_between(initial_answers, engine, d_from, d_rev)
+    rev = compute_ri_amount_between(revised_answers, engine, d_from, d_rev)
+    delta = r2(float(rev["total"]) - float(ini["total"]))
+
+    return {
+        "from": str(d_from),
+        "to": str(d_rev),
+        "total_initial": float(ini["total"]),
+        "total_revise": float(rev["total"]),
+        "delta": float(delta),
+        "nature": ("DU" if delta > 0 else "INDU" if delta < 0 else "NEUTRE"),
+        "detail_initial": ini["periods"],
+        "detail_revise": rev["periods"],
+    }
+
+# ----------------------------
+# PDF comparatif = fusion (avant + après)
+# ----------------------------
+def merge_pdfs(pdf_a: BytesIO | None, pdf_b: BytesIO | None) -> BytesIO | None:
+    """
+    Fusionne 2 PDF en 1 (pages A puis pages B).
+    Nécessite pypdf ou PyPDF2. Si absent => None.
+    """
+    if pdf_a is None or pdf_b is None:
+        return None
+    try:
+        try:
+            from pypdf import PdfReader, PdfWriter
+        except Exception:
+            from PyPDF2 import PdfReader, PdfWriter  # fallback
+
+        ra = PdfReader(BytesIO(pdf_a.getvalue()))
+        rb = PdfReader(BytesIO(pdf_b.getvalue()))
+        w = PdfWriter()
+
+        for p in ra.pages:
+            w.add_page(p)
+        for p in rb.pages:
+            w.add_page(p)
+
+        out = BytesIO()
+        w.write(out)
+        out.seek(0)
+        return out
+    except Exception:
+        return None
+
+
+# ============================================================
 # ARCHIVES / SAUVEGARDE / RÉVISION
 #   - Sauvegarde par fichier JSON (1 fichier = 1 dossier nommé)
 #   - Chaque fichier contient:
