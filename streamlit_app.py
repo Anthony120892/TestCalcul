@@ -6,6 +6,9 @@ from datetime import date, timedelta
 from io import BytesIO
 
 import streamlit as st
+import re
+import uuid
+from datetime import datetime
 
 # ============================================================
 # CONFIG PAR DÉFAUT (fusion avec ris_rules.json si présent)
@@ -125,6 +128,150 @@ def safe_parse_date(x):
         except Exception:
             return None
     return None
+
+# ============================================================
+# ARCHIVES / SAUVEGARDE / RÉVISION
+#   - Sauvegarde par fichier JSON (1 fichier = 1 dossier nommé)
+#   - Chaque fichier contient:
+#       - snapshot "initial"
+#       - liste "revisions" (ancienne + nouvelle version)
+# ============================================================
+SAVE_DIR = "saved_cases"
+
+def _ensure_save_dir():
+    os.makedirs(SAVE_DIR, exist_ok=True)
+
+def _now_iso():
+    return datetime.now().isoformat(timespec="seconds")
+
+def _safe_filename(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"[^a-zA-Z0-9_\-\.]+", "_", s)
+    return s[:80] if s else "sans_nom"
+
+def _json_default(o):
+    if isinstance(o, (date, datetime)):
+        return o.isoformat()
+    return str(o)
+
+def _case_path(case_name: str) -> str:
+    _ensure_save_dir()
+    fname = _safe_filename(case_name)
+    return os.path.join(SAVE_DIR, f"{fname}.json")
+
+def list_saved_cases() -> list[dict]:
+    _ensure_save_dir()
+    out = []
+    for fn in sorted(os.listdir(SAVE_DIR)):
+        if not fn.lower().endswith(".json"):
+            continue
+        path = os.path.join(SAVE_DIR, fn)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            out.append({
+                "file": fn,
+                "name": data.get("case_name") or fn[:-5],
+                "created_at": data.get("created_at"),
+                "updated_at": data.get("updated_at"),
+                "n_revisions": len(data.get("revisions") or []),
+            })
+        except Exception:
+            out.append({
+                "file": fn, "name": fn[:-5],
+                "created_at": None, "updated_at": None,
+                "n_revisions": None
+            })
+    return out
+
+def load_saved_case(case_name_or_file: str) -> dict | None:
+    _ensure_save_dir()
+    # accepte soit un "nom" soit un "fichier"
+    if case_name_or_file.lower().endswith(".json"):
+        path = os.path.join(SAVE_DIR, case_name_or_file)
+    else:
+        path = _case_path(case_name_or_file)
+
+    if not os.path.exists(path):
+        return None
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_new_case(case_name: str, payload: dict) -> dict:
+    """
+    payload = {
+      "engine": {...}, "mode": "...",
+      "answers": {...},
+      "seg_first": {...} ou None,
+      "res_ms": {...} (mois suivants),
+      "meta": {...} optionnel
+    }
+    """
+    _ensure_save_dir()
+    path = _case_path(case_name)
+    now = _now_iso()
+
+    doc = {
+        "case_id": str(uuid.uuid4()),
+        "case_name": (case_name or "").strip(),
+        "created_at": now,
+        "updated_at": now,
+        "initial": {
+            "saved_at": now,
+            **(payload or {})
+        },
+        "revisions": []
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False, indent=2, default=_json_default)
+
+    return doc
+
+def append_revision(case_name_or_file: str, revision_payload: dict, note: str = "") -> dict:
+    """
+    Ajoute une révision : conserve l'historique.
+    """
+    doc = load_saved_case(case_name_or_file)
+    if doc is None:
+        raise FileNotFoundError("Dossier introuvable")
+
+    now = _now_iso()
+    rev = {
+        "revision_id": str(uuid.uuid4()),
+        "saved_at": now,
+        "note": (note or "").strip(),
+        **(revision_payload or {})
+    }
+
+    doc.setdefault("revisions", [])
+    doc["revisions"].append(rev)
+    doc["updated_at"] = now
+
+    # réécrit dans le même fichier
+    file_name = None
+    if isinstance(case_name_or_file, str) and case_name_or_file.lower().endswith(".json"):
+        file_name = case_name_or_file
+        path = os.path.join(SAVE_DIR, file_name)
+    else:
+        path = _case_path(doc.get("case_name") or case_name_or_file)
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False, indent=2, default=_json_default)
+
+    return doc
+
+def _build_calc_payload(engine: dict, mode_label: str, answers: dict, seg_first: dict | None, res_ms: dict, meta: dict | None = None) -> dict:
+    return {
+        "engine_version": (engine or {}).get("version"),
+        "engine_config": (engine or {}).get("config"),
+        "mode": mode_label,
+        "answers": answers or {},
+        "seg_first": seg_first,
+        "res_ms": res_ms or {},
+        "meta": meta or {},
+    }
 
 # ============================================================
 # CAPITAUX MOBILIERS (annuel) - détail tranches
@@ -1766,6 +1913,35 @@ with st.sidebar:
     st.write("**Exonérations socio-pro**")
     cfg["socio_prof"]["max_mensuel"] = st.number_input("Exo socio-pro max (€/mois)", min_value=0.0, value=float(cfg["socio_prof"]["max_mensuel"]), format="%.2f")
     cfg["socio_prof"]["artistique_annuel"] = st.number_input("Exo artistique irrégulier (€/an)", min_value=0.0, value=float(cfg["socio_prof"]["artistique_annuel"]), format="%.2f")
+    st.divider()
+    st.subheader("📦 Archives (sauvegarde / révision)")
+
+    # 1) Liste dossiers existants
+    cases = list_saved_cases()
+    options = ["—"] + [f"{c['name']}  (rev: {c['n_revisions']})" for c in cases]
+
+    picked = st.selectbox("Dossiers enregistrés", options=options, index=0, key="arch_pick")
+    picked_case = None
+    if picked != "—":
+        # récupère l’index dans cases
+        idx = options.index(picked) - 1
+        picked_case = cases[idx]["file"]  # on garde le fichier, plus sûr
+
+    c1, c2 = st.columns(2)
+    if c1.button("Charger", key="arch_load_btn", disabled=(picked_case is None)):
+        doc = load_saved_case(picked_case)
+        st.session_state["loaded_case_doc"] = doc
+        st.success("Dossier chargé (aperçu en bas de page).")
+
+    if c2.button("Supprimer (fichier)", key="arch_del_btn", disabled=(picked_case is None)):
+        try:
+            os.remove(os.path.join(SAVE_DIR, picked_case))
+            st.success("Supprimé.")
+        except Exception as e:
+            st.error(f"Suppression impossible: {e}")
+
+    st.caption("Astuce: calcule d’abord, puis utilise les boutons 'Enregistrer' dans la page (section Archives).")
+
 
 # ---------------------------
 # UI Helpers
@@ -2610,7 +2786,16 @@ if multi_mode:
                     mime="application/pdf",
                     key=f"dl_pdf_{i}"
                 )
-
+          # ✅ mémorise le dernier "batch" multi (utile pour archivage)
+        st.session_state["last_calc_payload"] = {
+            "kind": "multi",
+            "saved_at": _now_iso(),
+            "engine_version": engine.get("version"),
+            "engine_config": engine.get("config"),
+            "mode": "multi",
+            "results": results,      # contient dossier + res + seg
+            "household": household if advanced_household else None,
+        }      
 else:
     st.subheader("Mode SIMPLE (single dossier)")
     advanced_single = mode_cascade
@@ -2957,3 +3142,117 @@ else:
                 mime="application/pdf",
                 key="dl_pdf_single"
             )
+        # ✅ mémorise le dernier calcul single (utile pour archivage)
+        st.session_state["last_calc_payload"] = {
+            "kind": "single",
+            "saved_at": _now_iso(),
+            "engine_version": engine.get("version"),
+            "engine_config": engine.get("config"),
+            "mode": "single",
+            "answers": answers,
+            "seg_first": seg_first,
+            "res_ms": res_ms,
+        }
+
+st.divider()
+st.subheader("📦 Archives — enregistrer / réviser")
+
+lastp = st.session_state.get("last_calc_payload")
+loaded = st.session_state.get("loaded_case_doc")
+
+colA, colB = st.columns([2, 1])
+
+with colA:
+    case_name = st.text_input("Nom du dossier (pour enregistrer)", value="", key="case_name_save")
+    note = st.text_input("Note de révision (optionnel)", value="", key="case_note_rev")
+
+with colB:
+    st.caption("Fonctionne après un calcul.")
+
+# --- Enregistrer nouveau dossier ---
+if st.button("✅ Enregistrer comme nouveau dossier", disabled=(not lastp or not case_name.strip())):
+    try:
+        if lastp["kind"] == "single":
+            payload = _build_calc_payload(
+                engine=engine,
+                mode_label=lastp.get("mode","single"),
+                answers=lastp.get("answers") or {},
+                seg_first=lastp.get("seg_first"),
+                res_ms=lastp.get("res_ms") or {},
+                meta={"kind": "single"}
+            )
+            save_new_case(case_name.strip(), payload)
+
+        else:
+            # multi : on sauvegarde l'ensemble du batch
+            payload = {
+                "engine_version": lastp.get("engine_version"),
+                "engine_config": lastp.get("engine_config"),
+                "mode": "multi",
+                "results": lastp.get("results"),
+                "household": lastp.get("household"),
+                "meta": {"kind": "multi"}
+            }
+            save_new_case(case_name.strip(), payload)
+
+        st.success("Dossier enregistré ✅")
+    except Exception as e:
+        st.error(f"Erreur d’enregistrement: {e}")
+
+# --- Ajouter révision au dossier chargé (ou au nom donné) ---
+target_doc = loaded
+target_name = None
+if target_doc and target_doc.get("case_name"):
+    target_name = target_doc.get("case_name")
+
+if st.button("🧾 Enregistrer comme RÉVISION du dossier chargé", disabled=(not lastp or not target_doc)):
+    try:
+        if lastp["kind"] == "single":
+            rev_payload = _build_calc_payload(
+                engine=engine,
+                mode_label=lastp.get("mode","single"),
+                answers=lastp.get("answers") or {},
+                seg_first=lastp.get("seg_first"),
+                res_ms=lastp.get("res_ms") or {},
+                meta={"kind": "single_revision"}
+            )
+        else:
+            rev_payload = {
+                "engine_version": lastp.get("engine_version"),
+                "engine_config": lastp.get("engine_config"),
+                "mode": "multi",
+                "results": lastp.get("results"),
+                "household": lastp.get("household"),
+                "meta": {"kind": "multi_revision"}
+            }
+
+        append_revision(target_doc.get("case_name") or "dossier", rev_payload, note=note)
+        st.success("Révision ajoutée ✅")
+        # recharge pour afficher le compteur à jour
+        st.session_state["loaded_case_doc"] = load_saved_case(_safe_filename(target_doc.get("case_name")) + ".json")
+    except Exception as e:
+        st.error(f"Erreur révision: {e}")
+
+# --- Aperçu dossier chargé ---
+if loaded:
+    st.markdown("### 📄 Dossier chargé — aperçu")
+    st.write(f"**Nom :** {loaded.get('case_name')}")
+    st.write(f"**Créé :** {loaded.get('created_at')} — **MAJ :** {loaded.get('updated_at')}")
+    st.write(f"**Révisions :** {len(loaded.get('revisions') or [])}")
+
+    with st.expander("Voir snapshot initial"):
+        st.json(loaded.get("initial", {}), expanded=False)
+
+    with st.expander("Voir révisions"):
+        st.json(loaded.get("revisions", []), expanded=False)
+
+    # Option pratique : exporter le JSON
+    st.download_button(
+        "⬇️ Télécharger le dossier (JSON)",
+        data=json.dumps(loaded, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8"),
+        file_name=f"{_safe_filename(loaded.get('case_name'))}.json",
+        mime="application/json",
+        key="dl_case_json"
+    )
+else:
+    st.caption("Charge un dossier via la sidebar pour voir l’historique et ajouter des révisions.")
