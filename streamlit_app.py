@@ -2163,12 +2163,17 @@ with st.sidebar:
             for c in cases
         ]
         sel = st.selectbox("Ouvrir un dossier sauvegardé", options=list(range(len(cases))), format_func=lambda i: labels[i])
-        sel_case_id = (cases[sel] or {}).get("case_id", "")
+
+        selected_case = cases[sel] if sel < len(cases) else {}
+        sel_case_id = selected_case.get("case_id")
+
+        # 🔁 Compatibilité anciennes sauvegardes
+        if not sel_case_id:
+        # on utilise un fallback basé sur l'index
+        sel_case_id = selected_case.get("name", f"legacy_{sel}")
+        selected_case["case_id"] = sel_case_id
 
         if st.button("Charger ce dossier", key="load_case_btn"):
-            if not sel_case_id:
-                st.error("Ce dossier n'a pas de case_id (sauvegarde trop ancienne ou incomplète).")
-                st.stop()
             st.session_state["loaded_case_id"] = sel_case_id
             st.session_state["loaded_case"] = load_case(sel_case_id)
 
