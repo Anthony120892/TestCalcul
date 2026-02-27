@@ -2151,7 +2151,41 @@ with st.sidebar:
 
     st.caption("Astuce: calcule d’abord, puis utilise les boutons 'Enregistrer' dans la page (section Archives).")
 
+    st.divider()
+    st.subheader("Archives / Révisions")
 
+    cases = list_saved_cases()
+    if not cases:
+        st.caption("Aucune sauvegarde pour l’instant.")
+    else:
+        labels = [
+            f"{c['name']}  (rev: {c['revisions_count']}) — {c.get('created_at','')}"
+            for c in cases
+        ]
+        sel = st.selectbox("Ouvrir un dossier sauvegardé", options=list(range(len(cases))), format_func=lambda i: labels[i])
+        sel_case_id = cases[sel]["case_id"]
+
+        if st.button("Charger ce dossier", key="load_case_btn"):
+            st.session_state["loaded_case_id"] = sel_case_id
+            st.session_state["loaded_case"] = load_case(sel_case_id)
+
+    if st.session_state.get("loaded_case"):
+        lc = st.session_state["loaded_case"]
+        st.success(f"Dossier chargé : {lc.get('name')}")
+
+        init = lc.get("initial") or {}
+        st.caption("Montants initiaux (rappel)")
+        try:
+            init_res = init.get("res_ms") or {}
+            init_seg = init.get("seg_first") or {}
+            st.write(f"- RI mois suivant : {euro(init_res.get('ris_theorique_mensuel',0))} € / mois")
+            if init_seg and init_seg.get("segments"):
+                st.write(f"- Total 1er mois : {euro(init_seg.get('ris_1er_mois_total',0))} €")
+        except Exception:
+            pass
+
+        revs = lc.get("revisions") or []
+        st.write(f"Révisions : {len(revs)}")
 # ---------------------------
 # UI Helpers
 # ---------------------------
@@ -2966,6 +3000,16 @@ if multi_mode:
             results.append({"dossier": d, "res": res_ms, "seg": seg_first})
             pdf_buffers.append(pdf_buf)
 
+        # ✅ Stocker le dernier calcul multi dans la session (pour sauvegarde / révision)
+        st.session_state["last_calc_mode"] = "multi"
+        st.session_state["last_calc_multi"] = {
+            "engine_version": engine.get("version"),
+            "calculated_at": _now_iso(),
+            "results": results,          # contient dossier/res/seg
+            "pdf_buffers": pdf_buffers,  # liste BytesIO
+        }
+
+        
         # affichage résultats
         st.subheader("Résultats")
         for i, r in enumerate(results):
@@ -2995,6 +3039,28 @@ if multi_mode:
                     mime="application/pdf",
                     key=f"dl_pdf_{i}"
                 )
+
+                    st.divider()
+            st.caption("Sauvegarde / Révision")
+            save_name = st.text_input("Nom de sauvegarde", value=f"{d['label']}", key=f"save_name_{i}")
+            case_id = st.text_input("ID dossier (unique)", value=_safe_filename(d["label"]), key=f"save_id_{i}")
+
+            if st.button("Enregistrer ce calcul", key=f"save_btn_{i}"):
+                payload = {
+                    "initial": {
+                        "meta": {
+                            "engine_version": engine.get("version"),
+                            "saved_at": _now_iso(),
+                            "mode": "multi",
+                        },
+                        "answers": results[i]["seg"].get("detail_mois_suivants", {}) and results[i]["dossier"],  # fallback
+                        "res_ms": results[i]["res"],
+                        "seg_first": results[i]["seg"],
+                    }
+                }
+                ok, msg = save_new_case(case_id=case_id, name=save_name, payload=payload)
+                (st.success if ok else st.error)(msg)
+                
           # ✅ mémorise le dernier "batch" multi (utile pour archivage)
         st.session_state["last_calc_payload"] = {
             "kind": "multi",
@@ -3328,6 +3394,17 @@ else:
             cfg_cession=cfg["cession"],
         )
 
+                # ✅ Stocker le dernier calcul SINGLE dans la session (pour sauvegarde / révision)
+        st.session_state["last_calc_mode"] = "single"
+        st.session_state["last_calc_single"] = {
+            "engine_version": engine.get("version"),
+            "calculated_at": _now_iso(),
+            "answers": answers,
+            "res_ms": res_ms,
+            "seg_first": seg_first,
+            "pdf": pdf_buf,
+        }
+
         # Affichage
         st.subheader("Résultat")
         if demandeur_nom.strip():
@@ -3351,6 +3428,138 @@ else:
                 mime="application/pdf",
                 key="dl_pdf_single"
             )
+
+                st.divider()
+        st.subheader("Sauvegarde / Révision (single)")
+
+        # --- Sauvegarde du calcul courant ---
+        save_name = st.text_input("Nom de sauvegarde", value=(demandeur_nom.strip() or "Dossier"), key="s_save_name")
+        case_id = st.text_input("ID dossier (unique)", value=_safe_filename(save_name), key="s_save_id")
+
+        if st.button("Enregistrer CE calcul comme 'initial'", key="s_save_btn"):
+            payload = {
+                "initial": {
+                    "meta": {
+                        "engine_version": engine.get("version"),
+                        "saved_at": _now_iso(),
+                        "mode": "single",
+                    },
+                    "answers": st.session_state["last_calc_single"]["answers"],
+                    "res_ms": st.session_state["last_calc_single"]["res_ms"],
+                    "seg_first": st.session_state["last_calc_single"]["seg_first"],
+                }
+            }
+            ok, msg = save_new_case(case_id=case_id, name=save_name, payload=payload)
+            (st.success if ok else st.error)(msg)
+
+        # --- Si un dossier est chargé (sidebar), proposer la révision ---
+        loaded = st.session_state.get("loaded_case")
+        if loaded:
+            st.info(f"Révision sur dossier chargé : {loaded.get('name')} (ID: {loaded.get('case_id')})")
+            init = loaded.get("initial") or {}
+
+            # Montants initiaux (affichage clair)
+            init_res = init.get("res_ms") or {}
+            init_seg = init.get("seg_first") or {}
+            st.write(f"**Initial** — RI mois suivant : {euro(init_res.get('ris_theorique_mensuel',0))} € / mois")
+            if init_seg and init_seg.get("segments"):
+                st.write(f"**Initial** — Total 1er mois : {euro(init_seg.get('ris_1er_mois_total',0))} €")
+
+            # Montants révisés (issus du calcul courant)
+            cur = st.session_state.get("last_calc_single") or {}
+            cur_res = cur.get("res_ms") or {}
+            cur_seg = cur.get("seg_first") or {}
+            st.write(f"**Révisé** — RI mois suivant : {euro(cur_res.get('ris_theorique_mensuel',0))} € / mois")
+            if cur_seg and cur_seg.get("segments"):
+                st.write(f"**Révisé** — Total 1er mois : {euro(cur_seg.get('ris_1er_mois_total',0))} €")
+
+            # --- Indu / Dû sur période ---
+            st.markdown("### Indu / Dû (entre demande initiale et date de révision)")
+            d_from = safe_parse_date((init.get("answers") or {}).get("date_demande")) or safe_parse_date(init_res.get("as_of")) or date.today()
+            d_rev = st.date_input("Date de révision", value=date.today(), key="rev_date")
+
+            calc_indu = st.checkbox("Calculer indu/dû sur la période", value=True, key="do_indu")
+            if calc_indu and isinstance(d_from, date) and isinstance(d_rev, date):
+                ini_answers = init.get("answers") or {}
+                rev_answers = cur.get("answers") or {}
+                diff = compute_indu_ou_du(ini_answers, rev_answers, engine, d_from, d_rev)
+
+                st.write(f"Total initial sur période : **{euro(diff['total_initial'])} €**")
+                st.write(f"Total révisé sur période : **{euro(diff['total_revise'])} €**")
+
+                if diff["nature"] == "DU":
+                    st.success(f"➡️ DÛ : **{euro(diff['delta'])} €** (le droit augmente)")
+                elif diff["nature"] == "INDU":
+                    st.warning(f"➡️ INDU : **{euro(abs(diff['delta']))} €** (le droit diminue)")
+                else:
+                    st.info("➡️ Aucun écart (NEUTRE)")
+
+            # --- PDF comparatif ---
+            st.markdown("### PDF comparatif (avant + après)")
+            if st.button("Générer PDF comparatif", key="mk_compare_pdf"):
+                # PDF avant
+                pdf_init = make_decision_pdf_cpas(
+                    dossier_label=f"{loaded.get('name','Dossier')} — AVANT révision",
+                    answers_snapshot=init.get("answers") or {},
+                    res_mois_suivants=init.get("res_ms") or {},
+                    seg_first_month=init.get("seg_first"),
+                    logo_path="logo.png",
+                    cfg_soc=cfg["socio_prof"],
+                    cfg_ale=cfg["ale"],
+                    cfg_cap=cfg["capital_mobilier"],
+                    cfg_immo=cfg["immo"],
+                    cfg_cession=cfg["cession"],
+                )
+                # PDF après
+                pdf_rev = cur.get("pdf")
+                if pdf_rev is None:
+                    pdf_rev = make_decision_pdf_cpas(
+                        dossier_label=f"{loaded.get('name','Dossier')} — APRÈS révision",
+                        answers_snapshot=cur.get("answers") or {},
+                        res_mois_suivants=cur.get("res_ms") or {},
+                        seg_first_month=cur.get("seg_first"),
+                        logo_path="logo.png",
+                        cfg_soc=cfg["socio_prof"],
+                        cfg_ale=cfg["ale"],
+                        cfg_cap=cfg["capital_mobilier"],
+                        cfg_immo=cfg["immo"],
+                        cfg_cession=cfg["cession"],
+                    )
+
+                pdf_cmp = merge_pdfs(pdf_init, pdf_rev)
+                if pdf_cmp is not None:
+                    st.download_button(
+                        "Télécharger PDF comparatif (avant + après)",
+                        data=pdf_cmp.getvalue(),
+                        file_name=f"comparatif_{_safe_filename(loaded.get('name','dossier'))}.pdf",
+                        mime="application/pdf",
+                        key="dl_compare_pdf"
+                    )
+                else:
+                    st.error("Impossible de fusionner les PDF (pypdf/PyPDF2 manquant).")
+
+            # --- Enregistrer la révision dans le dossier ---
+            if st.button("Enregistrer cette révision dans le dossier chargé", key="save_revision_btn"):
+                ini_answers = init.get("answers") or {}
+                rev_answers = cur.get("answers") or {}
+                d_from = safe_parse_date(ini_answers.get("date_demande")) or date.today()
+                d_rev = safe_parse_date(str(d_rev)) if not isinstance(d_rev, date) else d_rev
+                diff = compute_indu_ou_du(ini_answers, rev_answers, engine, d_from, d_rev)
+
+                ok, msg = append_revision(
+                    case_id=loaded.get("case_id"),
+                    revision_payload={
+                        "revised": {
+                            "meta": {"engine_version": engine.get("version")},
+                            "answers": rev_answers,
+                            "res_ms": cur.get("res_ms") or {},
+                            "seg_first": cur.get("seg_first"),
+                        },
+                        "diff": diff,
+                    }
+                )
+                (st.success if ok else st.error)(msg)
+                
         # ✅ mémorise le dernier calcul single (utile pour archivage)
         st.session_state["last_calc_payload"] = {
             "kind": "single",
