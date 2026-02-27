@@ -3040,7 +3040,7 @@ if multi_mode:
                     key=f"dl_pdf_{i}"
                 )
 
-                    st.divider()
+            st.divider()
             st.caption("Sauvegarde / Révision")
             save_name = st.text_input("Nom de sauvegarde", value=f"{d['label']}", key=f"save_name_{i}")
             case_id = st.text_input("ID dossier (unique)", value=_safe_filename(d["label"]), key=f"save_id_{i}")
