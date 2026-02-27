@@ -2175,7 +2175,7 @@ with st.sidebar:
 
         if st.button("Charger ce dossier", key="load_case_btn"):
             st.session_state["loaded_case_id"] = sel_case_id
-            st.session_state["loaded_case"] = load_case(sel_case_id)
+            st.session_state["loaded_case"] = selected_case
 
     if st.session_state.get("loaded_case"):
         lc = st.session_state["loaded_case"]
