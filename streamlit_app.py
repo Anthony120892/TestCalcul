@@ -3429,7 +3429,7 @@ else:
                 key="dl_pdf_single"
             )
 
-                st.divider()
+        st.divider()
         st.subheader("Sauvegarde / Révision (single)")
 
         # --- Sauvegarde du calcul courant ---
